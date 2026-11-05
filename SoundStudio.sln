@@ -1,0 +1,66 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{E0B7DD93-9971-40FE-83C3-51F08CBE88B7}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SoundStudio.Core", "src\SoundStudio.Core\SoundStudio.Core.csproj", "{FFEE9E09-0D1E-4DAF-9A78-9E2C5AF37D52}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tools", "tools", "{92E04349-0481-49DA-BFE6-C500922974BF}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SabInspect", "tools\SabInspect\SabInspect.csproj", "{C8409107-556A-44AE-B20A-08238847A0C7}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{6CC56166-7939-4627-A4E3-93D5415910FA}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SoundStudio.Core.Tests", "tests\SoundStudio.Core.Tests\SoundStudio.Core.Tests.csproj", "{3F1F7643-4183-4DD2-9D73-9D60D19A6AA2}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SoundStudio.App", "src\SoundStudio.App\SoundStudio.App.csproj", "{BDB73726-4566-43E7-AFFE-EEC7C383D0F8}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SoundStudio.Audio", "src\SoundStudio.Audio\SoundStudio.Audio.csproj", "{B47841A9-2328-4197-B6B8-F581641AA904}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SoundStudio.Sync", "src\SoundStudio.Sync\SoundStudio.Sync.csproj", "{79F441ED-8863-47AC-AD79-4E446D4B5013}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{FFEE9E09-0D1E-4DAF-9A78-9E2C5AF37D52}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FFEE9E09-0D1E-4DAF-9A78-9E2C5AF37D52}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FFEE9E09-0D1E-4DAF-9A78-9E2C5AF37D52}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FFEE9E09-0D1E-4DAF-9A78-9E2C5AF37D52}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C8409107-556A-44AE-B20A-08238847A0C7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C8409107-556A-44AE-B20A-08238847A0C7}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C8409107-556A-44AE-B20A-08238847A0C7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C8409107-556A-44AE-B20A-08238847A0C7}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3F1F7643-4183-4DD2-9D73-9D60D19A6AA2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3F1F7643-4183-4DD2-9D73-9D60D19A6AA2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3F1F7643-4183-4DD2-9D73-9D60D19A6AA2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3F1F7643-4183-4DD2-9D73-9D60D19A6AA2}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BDB73726-4566-43E7-AFFE-EEC7C383D0F8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BDB73726-4566-43E7-AFFE-EEC7C383D0F8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BDB73726-4566-43E7-AFFE-EEC7C383D0F8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BDB73726-4566-43E7-AFFE-EEC7C383D0F8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B47841A9-2328-4197-B6B8-F581641AA904}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B47841A9-2328-4197-B6B8-F581641AA904}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B47841A9-2328-4197-B6B8-F581641AA904}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B47841A9-2328-4197-B6B8-F581641AA904}.Release|Any CPU.Build.0 = Release|Any CPU
+		{79F441ED-8863-47AC-AD79-4E446D4B5013}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{79F441ED-8863-47AC-AD79-4E446D4B5013}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{79F441ED-8863-47AC-AD79-4E446D4B5013}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{79F441ED-8863-47AC-AD79-4E446D4B5013}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{FFEE9E09-0D1E-4DAF-9A78-9E2C5AF37D52} = {E0B7DD93-9971-40FE-83C3-51F08CBE88B7}
+		{C8409107-556A-44AE-B20A-08238847A0C7} = {92E04349-0481-49DA-BFE6-C500922974BF}
+		{3F1F7643-4183-4DD2-9D73-9D60D19A6AA2} = {6CC56166-7939-4627-A4E3-93D5415910FA}
+		{BDB73726-4566-43E7-AFFE-EEC7C383D0F8} = {E0B7DD93-9971-40FE-83C3-51F08CBE88B7}
+		{B47841A9-2328-4197-B6B8-F581641AA904} = {E0B7DD93-9971-40FE-83C3-51F08CBE88B7}
+		{79F441ED-8863-47AC-AD79-4E446D4B5013} = {E0B7DD93-9971-40FE-83C3-51F08CBE88B7}
+	EndGlobalSection
+EndGlobal

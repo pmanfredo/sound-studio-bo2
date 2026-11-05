@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>SoundStudio.Core</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Hash -> asset path database from master131's Black Ops II Sound Studio (MIT). -->
+    <EmbeddedResource Include="Resources\Names.deflate" LogicalName="SoundStudio.Core.Names.deflate" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="SoundStudio.Core.Tests" />
+  </ItemGroup>
+
+</Project>
