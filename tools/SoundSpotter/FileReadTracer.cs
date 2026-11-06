@@ -12,8 +12,10 @@ public sealed record SpotterOptions
     public string? ProcessFilter { get; init; }
     /// <summary>Print every bank read (offset, size, owning sound), not just play starts.</summary>
     public bool Raw { get; init; }
-    /// <summary>Also print bulk and metadata reads.</summary>
+    /// <summary>Also print bulk, metadata, loop and per-sound .sabl load reads.</summary>
     public bool Verbose { get; init; }
+    /// <summary>Optional file that receives every printed line and the summary (flushed per line).</summary>
+    public TextWriter? Log { get; init; }
 }
 
 /// <summary>
@@ -27,6 +29,7 @@ public sealed class FileReadTracer
     private readonly SpotterOptions _options;
     private readonly ReadStats _stats = new();
     private readonly object _gate = new();
+    private readonly Dictionary<string, (DateTime First, DateTime Last, int Count)> _loads = new();
 
     public FileReadTracer(BankIndex index, SpotterOptions options)
     {
@@ -50,7 +53,8 @@ public sealed class FileReadTracer
             throw new UnauthorizedAccessException("Kernel file I/O tracing needs an elevated (Run as administrator) terminal.");
 
         // Windows 8+ allows private kernel sessions, so we don't fight other tools for "NT Kernel Logger".
-        using var session = new TraceEventSession("SoundSpotter-FileIO") { StopOnDispose = true, BufferSizeMB = 64 };
+        using var session = new TraceEventSession("SoundSpotter-FileIO") { StopOnDispose = true, BufferSizeMB = 64, BufferQuantumKB = 8 };
+        // Small buffers fill (and so reach us) sooner: the selftest measured ~3 s delay with the 64 KB default.
         session.EnableKernelProvider(
             KernelTraceEventParser.Keywords.FileIOInit |   // FileCreate / FileName events: maps file objects to paths
             KernelTraceEventParser.Keywords.FileIO |       // FileIo Read with offset + size, cached or not
@@ -80,7 +84,7 @@ public sealed class FileReadTracer
             if (!BankIndex.IsBankFile(data.FileName) || !ProcessMatches(data.ProcessName)) return;
             lock (_gate) _stats.Opens++;
             if (_options.Raw || _options.Verbose)
-                Console.WriteLine($"{data.TimeStamp:HH:mm:ss.fff}  [open ] {Path.GetFileName(data.FileName)} by {data.ProcessName} ({data.ProcessID})");
+                lock (_gate) Write($"{data.TimeStamp:HH:mm:ss.fff}  [open ] {Path.GetFileName(data.FileName)} by {data.ProcessName} ({data.ProcessID})");
         };
         kernel.MemoryHardFault += data =>
         {
@@ -109,12 +113,57 @@ public sealed class FileReadTracer
             _stats.Record(ev);
             Spotted?.Invoke(ev);
 
+            if (ev.Kind == SpotKind.Load)
+            {
+                // A level load reads hundreds of .sabl sounds within a second: show one line per bank and burst.
+                if (_loads.TryGetValue(ev.Bank.Name, out var burst) && time - burst.Last > TimeSpan.FromSeconds(2))
+                    FlushLoad(ev.Bank.Name);
+                _loads[ev.Bank.Name] = _loads.TryGetValue(ev.Bank.Name, out burst) ? (burst.First, time, burst.Count + 1) : (time, time, 1);
+            }
+            else
+            {
+                FlushLoads(olderThan: time - TimeSpan.FromSeconds(2));
+            }
+
             if (_options.Raw)
-                Console.WriteLine($"{time:HH:mm:ss.fff}  [{what,-5}] {ev.Bank.Name} @0x{offset:X8} +{size,-8} {process,-28} -> {ev.Kind}" +
-                                  (ev.Entry != null ? $" {ev.Entry.DisplayName} (+{offset - ev.Entry.Offset} of {ev.Entry.Size})" : ""));
-            else if (ev.IsPlay || (_options.Verbose && ev.Kind is SpotKind.Bulk or SpotKind.Metadata))
-                Console.WriteLine(ev);
+                Write($"{time:HH:mm:ss.fff}  [{what,-5}] {ev.Bank.Name} @0x{offset:X8} +{size,-8} {process,-28} -> {ev.Kind}" +
+                      (ev.Entry != null ? $" {ev.Entry.DisplayName} (+{offset - ev.Entry.Offset} of {ev.Entry.Size})" : ""));
+            else if (ev.IsPlay || (_options.Verbose && ev.Kind is not SpotKind.Continue))
+                Write(ev.ToString());
         }
+    }
+
+    /// <summary>Prints any pending load bursts (call when tracing stops).</summary>
+    public void Finish()
+    {
+        lock (_gate)
+        {
+            FlushLoads(DateTime.MaxValue);
+            var summary = new StringWriter();
+            _stats.Print(summary);
+            Write(summary.ToString().TrimEnd());
+        }
+    }
+
+    private void FlushLoads(DateTime olderThan)
+    {
+        foreach (var bank in _loads.Where(l => l.Value.Last < olderThan).Select(l => l.Key).ToList())
+            FlushLoad(bank);
+    }
+
+    private void FlushLoad(string bank)
+    {
+        var (first, last, count) = _loads[bank];
+        _loads.Remove(bank);
+        Write($"{first:HH:mm:ss.fff}  [load ] {bank}: {count} sounds loaded into memory ({(last - first).TotalSeconds:0.0} s)");
+    }
+
+    private void Write(string line)
+    {
+        // Log first: when stdout is redirected, PowerShell may close the pipe on Ctrl+C before we finish.
+        _options.Log?.WriteLine(line);
+        _options.Log?.Flush();
+        try { Console.WriteLine(line); } catch (IOException) { }
     }
 }
 
@@ -127,6 +176,7 @@ public sealed class ReadStats
     public readonly Dictionary<bool, int> ReadsByStreamed = new() { [true] = 0, [false] = 0 };
     public readonly List<long> ReadSizes = new();
     public readonly HashSet<(string, int)> DistinctPlayed = new();
+    public readonly HashSet<(string, int)> DistinctLoaded = new();
     public readonly Dictionary<string, int> Processes = new();
 
     public void Record(SpotEvent ev)
@@ -135,6 +185,7 @@ public sealed class ReadStats
         ReadsByStreamed[ev.Bank.Streamed]++;
         if (ReadSizes.Count < 1_000_000) ReadSizes.Add(ev.Length);
         if (ev.IsPlay && ev.Entry != null) DistinctPlayed.Add((ev.Bank.Name, ev.Entry.Index));
+        if (ev.Kind == SpotKind.Load && ev.Entry != null) DistinctLoaded.Add((ev.Bank.Name, ev.Entry.Index));
         Processes[ev.Process] = Processes.GetValueOrDefault(ev.Process) + 1;
     }
 
@@ -144,9 +195,10 @@ public sealed class ReadStats
         w.WriteLine("=== SoundSpotter summary (paste this back) ===");
         w.WriteLine($"bank opens seen:        {Opens}");
         w.WriteLine($"reads of .sabs / .sabl: {ReadsByStreamed[true]} / {ReadsByStreamed[false]}");
+        w.WriteLine($".sabl sounds loaded:    {DistinctLoaded.Count}");
         w.WriteLine($"hard faults on banks:   {HardFaults} (non-zero => the game memory-maps banks)");
         foreach (var (k, v) in ByKind.OrderBy(k => k.Key)) w.WriteLine($"  {k,-12} {v}");
-        w.WriteLine($"distinct sounds played: {DistinctPlayed.Count}");
+        w.WriteLine($"distinct .sabs sounds played: {DistinctPlayed.Count}");
         if (ReadSizes.Count > 0)
         {
             var s = ReadSizes.Order().ToArray();

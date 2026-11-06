@@ -30,8 +30,10 @@ switch (command)
         Console.Error.WriteLine($"Indexing banks in {folder} ...");
         var index = BankIndex.Load(folder);
         Console.Error.WriteLine($"{index.Banks.Count} banks, {index.Banks.Sum(b => b.Entries.Count)} sounds, {SoundNameDatabase.Count} known names.");
+        using var log = Opt("--log") is { Length: > 0 } logPath ? new StreamWriter(logPath, append: false) : null;
         var tracer = new FileReadTracer(index, new SpotterOptions
         {
+            Log = log,
             ProcessFilter = Opt("--process") is { Length: > 0 } p ? p : null,
             Raw = Flag("--raw"),
             Verbose = Flag("--verbose"),
@@ -48,7 +50,7 @@ switch (command)
             try { tracer.RunLive(cts.Token); }
             catch (UnauthorizedAccessException ex) { Console.Error.WriteLine(ex.Message); return 1; }
         }
-        tracer.Stats.Print(Console.Out);
+        tracer.Finish();
         break;
     }
 
@@ -87,6 +89,27 @@ switch (command)
         return 2;
     }
 
+    case "reinterpret":
+    {
+        // Re-runs the interpreter over a saved `trace --raw` log, e.g. after tuning its rules.
+        var index = BankIndex.Load(folder);
+        var interpreter = new ReadInterpreter(index);
+        var pattern = new System.Text.RegularExpressions.Regex(@"^(\S+)\s+\[(?:read |fault)\] (\S+) @0x([0-9A-F]+) \+(\d+)");
+        string? loadBank = null; var loadCount = 0;
+        foreach (var line in File.ReadLines(args.Length > 1 ? args[1] : throw new ArgumentException("reinterpret <raw.txt>")))
+        {
+            var m = pattern.Match(line);
+            if (!m.Success) continue;
+            var time = DateTime.Today + TimeSpan.Parse(m.Groups[1].Value);
+            var ev = interpreter.Process(m.Groups[2].Value, Convert.ToInt64(m.Groups[3].Value, 16), long.Parse(m.Groups[4].Value), time);
+            if (ev == null) continue;
+            if (ev.Kind == SpotKind.Load) { if (loadBank != ev.Bank.Name && loadCount > 0) Console.WriteLine($"          [load ] {loadBank}: {loadCount} sounds"); if (loadBank != ev.Bank.Name) loadCount = 0; loadBank = ev.Bank.Name; loadCount++; continue; }
+            if (loadCount > 0) { Console.WriteLine($"          [load ] {loadBank}: {loadCount} sounds"); loadCount = 0; loadBank = null; }
+            if (ev.IsPlay || (Flag("--verbose") && ev.Kind == SpotKind.Loop)) Console.WriteLine(ev);
+        }
+        break;
+    }
+
     case "fpbench":
         FingerprintBench(BankIndex.Load(folder), folder,
             int.Parse(Opt("--sounds", "400")), int.Parse(Opt("--queries", "100")), int.Parse(Opt("--seed", "1")));
@@ -99,6 +122,7 @@ switch (command)
               stats                      streamed (.sabs) vs loaded (.sabl) sound counts and layout
               trace [--process name]     LIVE: watch kernel file reads of banks (Run as administrator)
                     [--raw] [--verbose]    --raw prints every read with offset/size (for the report)
+                    [--log file]           also write everything, plus the summary, to a file
               selftest                   check tracing works (admin, no game needed): reads one sound and names it
               replay <trace.etl>        same, from a trace recorded with: wpr -start FileIO ... wpr -stop x.etl
               fpbench [--sounds 400] [--queries 100]

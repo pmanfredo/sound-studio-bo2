@@ -11,22 +11,26 @@ Prototype: `tools/SoundSpotter` (console app). Tests: `tests/SoundSpotter.Tests`
 | | File-read tracing (ETW) | Audio fingerprinting |
 |---|---|---|
 | What it sees | which bank entry the game reads from disk | the audio the game outputs |
-| Coverage | `.sabs` only: **81% of sounds, 90% of audio time** | any sound, in principle |
-| Accuracy | exact name, as long as the game reads per sound (to be confirmed in a real run) | 98% for a clean window; **3% if the pitch is shifted 3%**; 72–88% in top 3 with 1–2 overlapping sounds |
-| Timing | when the read happens, which is probably slightly before you hear it | about 1.5 s after the sound starts |
+| Coverage | `.sabs` only: **81% of sounds, 90% of audio time**: music, voice-over, announcer, ambience. Not weapons, footsteps or impacts, which load from `.sabl` | any sound, in principle |
+| Accuracy | **exact name. Confirmed in a real run:** each play starts with a read at the sound's first byte | 98% for a clean window; **3% if the pitch is shifted 3%**; 72–88% in top 3 with 1–2 overlapping sounds |
+| Timing | when the first chunk is read, which is just before you hear it; events arrived about 3 s late with default ETW buffers (since reduced, to be re-measured) | about 1.5 s after the sound starts |
 | Admin | **yes** (kernel trace session) | no |
 | Touches the game process | no | no |
 | Cost | small: about 4 MB table index, loads in under a second | about 150 MB index, about 3 min build (single thread) |
-| Prototype status | built: `trace`, `selftest`, `replay` | offline benchmark only (`fpbench`) |
+| Prototype status | built and run against the game: `trace`, `selftest`, `replay`, `reinterpret` | offline benchmark only (`fpbench`) |
 
-**Recommendation: build the panel on ETW file-read tracing.** It gives exact names with no guessing, and
-it is cheap. Fingerprinting is clearly weaker in real gameplay. Its two failure modes, overlapping sounds
-and pitch variance, are exactly what BO2 combat sounds like. It is only worth adding later, as a fallback
-for the 19% of sounds that live in `.sabl` banks.
+**Recommendation: build the panel on ETW file-read tracing.** A real game session confirmed that it gives
+exact names for every streamed sound, with no guessing, and it is cheap.
 
-**Not yet verified:** the live trace has not run against the game. The tracer is unit-tested and its
-offset mapping passes against all 116 real banks. But whether Plutonium reads `.sabs` once per sound, and
-how early it reads, can only be seen in a real run. See [What the first real run should tell us](#what-the-first-real-run-should-tell-us).
+The catch the run revealed: the moment-to-moment combat sounds are in `.sabl` banks. Weapon shots, dry
+fire, footsteps, cloth, impacts and riot-shield hits are all read into memory at level load. So the panel
+will name music, voice-over, announcer lines and ambience live, but not gunfire.
+
+For those combat sounds, the tracer still reports exactly which `.sabl` sounds the current map loaded.
+That is a few hundred to about 1,500 candidates, not 25,000. A fingerprint matcher limited to that set is
+the only route to naming combat sounds. Pitch variance remains its weak point.
+
+The real-run results are in [Results from a real session](#results-from-a-real-session).
 
 ## The library
 
@@ -59,17 +63,22 @@ most, not the sound under its first byte. A test covers this case.
    - `MemoryHardFaults`: if the game memory-mapped the banks instead of reading them, this would show it.
    - `Process`: process names.
 3. Each read of a `.sabs` or `.sabl` file goes through `ReadInterpreter`, which labels it:
-   - `play`: the read starts at the sound's first byte (within 4 KB).
+   - `play`: a `.sabs` read starts at the sound's first byte (within 4 KB).
    - `play~`: the read lands mid-sound, and that sound has not been read recently.
    - `cont`: a later chunk of a sound that is already streaming. Hidden by default.
-   - `bulk`: one read covers more than 8 sounds, e.g. a whole `.sabl` loading with the level.
+   - `loop`: the sound restarts right after a later chunk reached its end. Ambience and music do this.
+     Hidden by default.
+   - `load`: a `.sabl` sound being read into memory. Printed as one line per bank per load burst.
+   - `bulk`: one read covers more than 8 sounds.
    - `meta`: a read of the header or tables.
 4. The output shows the name from `SoundNameDatabase`, the full asset path, the duration and the bank.
-   Illustrative format (not captured from a real run):
+   Real output from Nightclub (via `reinterpret`):
 
 ```
-20:14:03.512  [play ] wpn_ar_m27_fire_plr_01.wav                       0.62s  wpn_mp.sabs #1734  (64 KB read)
-               devraw\sound\wpn\ar\m27\wpn_ar_m27_fire_plr_01.wav
+19:23:04.471  [play ] vox_isa_tdm_start_00.SN65.pc.snd                   1.38s  mpl_code_post_gfx.english.sabs #4438  (75 KB read)
+               raw\english\sound\vox\scripted\isa\vox_isa_tdm_start_00.SN65.pc.snd
+19:23:04.472  [play ] mus_mp_spawn_cia_10sec.SN65.pc.snd                 9.05s  mpl_common.all.sabs #84  (128 KB read)
+               raw\sound\mus\mp\spawn\mus_mp_spawn_cia_10sec.SN65.pc.snd
 ```
 
 The tracer only reads trace events that Windows already produces. It opens no handle to the game, reads
@@ -78,19 +87,19 @@ Resource Monitor's disk tab, or Windows Performance Recorder.
 
 ### Coverage and limits
 
-- **Streamed `.sabs` sounds (20,700 of 25,446; 81% of sounds, 90% of audio time):** a streamed sound has
-  to be read from the file when it plays, so the read shows which sound it is. Most voice-over,
-  announcer, music and ambience lives here.
-- **Loaded `.sabl` sounds (4,746; 19%):** these are read into memory in bulk when a map or mode loads, so
-  their reads do not show when they play. The tool still reports which `.sabl` banks loaded, which narrows
-  "what could be playing" down to that map's set.
-- **Repeat plays:** ETW's FileIo events are logged above the file cache, so cached re-reads should still
-  appear. That only holds if the game re-reads each time. If its streaming engine keeps recently played
-  sounds in its own RAM cache, a second play within a short time could be invisible. The run will show
-  whether this happens.
-- **Timing:** streaming engines read ahead, so a `play` line probably appears a little before the sound is
-  heard. That suits a "now playing" list. Real-time ETW delivers events in batches, roughly once a second
-  at worst, so the panel will lag by up to about 1 s. `selftest` prints the measured delay.
+- **Streamed `.sabs` sounds (20,700 of 25,446; 81% of sounds, 90% of audio time):** read from disk at the
+  moment they play, so each play is visible. This is music, voice-over, announcer and ambience.
+- **Loaded `.sabl` sounds (4,746; 19%):** read into memory at level load. Their reads do not show when they
+  play. They are few by count, but they are the frequent combat sounds: weapons, footsteps, impacts. The
+  tool reports exactly which ones the current map loaded.
+- **Repeat plays:** confirmed visible. The game re-reads a `.sabs` sound every time it plays: the PA
+  announcement, the music track and the shore loops all showed up again.
+- **Timing:** the first chunk is read as the sound starts. Real-time ETW delivers events in batches,
+  though. The selftest measured **3.2 s** from read to event with the default 64 KB buffers. The buffers
+  are now 8 KB, which should cut this; re-run `selftest` to measure.
+- **Unnamed sounds:** a few streamed sounds have no entry in the name database and show as an id, e.g.
+  `0x72C3992A` in `cmn_root.all.sabs` (66 s long) and `0x2C5578BA` in `mpl_code_post_gfx.all.sabs`
+  (72 s long).
 - **Sounds in several banks:** 670 ids appear in more than one bank. The tracer reports the bank actually
   read, so there is no ambiguity.
 
@@ -104,35 +113,58 @@ Resource Monitor's disk tab, or Windows Performance Recorder.
   publish what its client checks, so I can't guarantee it never flags tools that run alongside the game.
   A careful first test is a private match or a solo zombies game.
 
-### What the first real run should tell us
+### Results from a real session
 
-This is what the prototype cannot know until it runs next to the game. Run these in an **elevated**
-terminal (Run as administrator), from the repo folder:
+The run was a trace from the main menu into a Nightclub match, about 3.5 minutes in total, with the trace
+started before the game.
+
+- `selftest`: **PASS**. It traced and named `air_dank_heavy.SL55.pc.snd`. The event arrived 3,159 ms after
+  the read.
+- **Process:** every bank access came from `plutonium-bootstrapper-win32`. Use `--process plutonium` to
+  ignore everything else.
+- **Opening a bank:** the game opens each bank, reads its 2 KB header, then reads the entry table at the
+  end of the file. This shows as `meta` lines.
+- **`.sabs` streaming (per sound, lazy, exact):**
+  - Every play began with a 128 KB read at **exactly** the sound's first byte (`+0`). Sounds under 128 KB
+    are read in one go.
+  - Long sounds read two chunks at once (a 256 KB prebuffer), then one 128 KB chunk about every
+    0.8–1.3 s, ending with a short final chunk.
+  - There were 21 start reads. They split into 16 plays and 5 loop restarts: shore wind left/right, plus
+    the PA announcement restarting.
+  - The plays were menu music, two licensed tracks on the club speakers, the PA voice-over, "TDM start"
+    and "boost" announcer lines, a spawn music sting, a strike-force music stinger and ambience.
+- **`.sabl` loading:** 1,463 reads, **one read per sound**, in bursts during level load (19:21:13–14 and
+  19:22:41–42). They included `wpn_peacekeeper_shot_plr`, `dry_fire_00`, `shot_00`–`_02`, footstep
+  surfaces (`wood_`, `water_`, `dirt_`, `metal_`, `snow_` …), `fly_cloth_*` and `riot_shield_impact*`.
+  None of these is read again when it plays.
+- **No memory mapping:** there were no hard-fault lines.
+- **Summary missing:** with `> spotter-raw.txt`, PowerShell closed the output pipe on Ctrl+C before the
+  summary was printed. Use `--log` instead (below).
+
+These findings changed the interpreter:
+
+- `.sabl` reads are now `load` events, grouped per bank and burst, instead of being counted as plays.
+- Loop restarts are labelled `loop`, so ambience doesn't flood the list.
+- `reinterpret <raw.txt>` re-runs the rules over a saved raw log, so tuning doesn't need another play
+  session.
+
+### How to run it
+
+In an **elevated** terminal (Run as administrator), from the repo folder. First check that tracing works,
+without the game:
 
 ```bash
 dotnet run -c Release --project tools/SoundSpotter -- selftest
 ```
 
-Expected output: `PASS: traced and named …` plus the event delay in ms. This proves tracing works on the
-PC without the game.
+Then live, ideally started before launching the game. Ctrl+C stops it, and the summary goes into the log:
 
 ```bash
-dotnet run -c Release --project tools/SoundSpotter -- trace --raw > spotter-raw.txt
+dotnet run -c Release --project tools/SoundSpotter -- trace --process plutonium --log spotter.txt
 ```
 
-Play for a few minutes, press Ctrl+C, and send the summary at the end of the file. It answers:
-
-1. **Per-sound reads?** If `play` lines appear when sounds play, yes. If only `bulk` lines appear for
-   `.sabs`, the game reads large ranges, and the tracer will need a time-and-position heuristic.
-2. **Memory-mapped?** A non-zero `hard faults on banks` count means the game maps the files. The tracer
-   already turns each faulted page into a read, but those events only fire on the first touch.
-3. **Read size:** the read-size histogram shows the streaming chunk size, for tuning the `StartSlack` and
-   `IdleGap` settings.
-4. **Which process:** the `process:` lines give the exact exe name to pass to `--process`. It is expected
-   to be `plutonium-bootstrapper-win32`.
-
-Start the trace **before** launching the game if you can. It works either way, but a session that is
-already running sees the game's file opens directly instead of relying on the rundown.
+Add `--raw` to log every read with its offset and size, or `--verbose` to also show loops, metadata reads
+and each loaded `.sabl` sound.
 
 If you would rather not run the tool itself while playing, use Windows' built-in recorder instead (also
 needs admin) and replay the trace afterwards:
@@ -220,13 +252,15 @@ The plan for a "Live: now playing" panel on ETW. Effort is about 2–3 days.
    box. Clicking a row selects the sound in the library, so you can play or replace it. Pin and "export
    session" are cheap extras, and useful for mapping in-game moments to sounds.
 4. **Edge cases (0.5 day).**
-   - Show `.sabl` bulk loads as one line ("zm_tomb.sabl loaded: 412 sounds").
-   - Tune `StartSlack` and `IdleGap` from the first real run.
+   - Show the "map loaded N combat sounds" line from the `.sabl` load bursts, as the tracer already does.
+   - Hide `loop` restarts, and treat a sound as "playing" until its last chunk is read.
    - Handle the helper being declined at the UAC prompt, and the trace session already existing after a
      crash (the session has a fixed name, so restarting replaces it).
-5. Fingerprinting: not now. If the `.sabl` gap matters later, process-loopback capture plus this matcher
-   could tag only `.sabl` candidates for the current map. That is a far smaller index (one map's
-   `.sabl` set, a few hundred sounds), which makes the matcher much more accurate.
+5. Fingerprinting: not now. Combat sounds (weapons, footsteps, impacts) are `.sabl`, so they need it.
+   Process-loopback capture plus this matcher, limited to the `.sabl` sounds the tracer saw the current
+   map load (about 1,500 in the Nightclub run), is a far smaller and more accurate index than 25,000
+   sounds. BO2's pitch randomization on weapon sounds remains the open problem: expect about 3 extra
+   days, with uncertain accuracy.
 
 ## Files
 
@@ -235,6 +269,7 @@ The plan for a "Live: now playing" panel on ETW. Effort is about 2–3 days.
   Pure logic.
 - `tools/SoundSpotter/FileReadTracer.cs`: the ETW session, `.etl` replay, and the summary statistics.
 - `tools/SoundSpotter/Fingerprinter.cs`: the landmark fingerprinter and index used by `fpbench`.
-- `tools/SoundSpotter/Program.cs`: the `stats`, `trace`, `selftest`, `replay` and `fpbench` commands.
-- `tests/SoundSpotter.Tests`: 27 tests, including a check that every sound in every real bank maps back to
+- `tools/SoundSpotter/Program.cs`: the `stats`, `trace`, `selftest`, `replay`, `reinterpret` and `fpbench`
+  commands.
+- `tests/SoundSpotter.Tests`: 30 tests, including a check that every sound in every real bank maps back to
   itself. That check is skipped when the game folder is missing.

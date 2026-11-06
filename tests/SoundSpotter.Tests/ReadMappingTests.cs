@@ -104,6 +104,48 @@ public class ReadMappingTests
     }
 
     [Fact]
+    public void Loaded_bank_reads_are_loads_not_plays()
+    {
+        // Observed in Plutonium: each .sabl sound is read once, one read per sound, at level load.
+        var index = Index();
+        index.Add(new BankMap("test.sabl", false, [A with { Bank = "test.sabl" }, B with { Bank = "test.sabl" }]));
+        var ev = new ReadInterpreter(index).Process("test.sabl", 0x3800, 0x10123, T0)!;
+        Assert.Equal(SpotKind.Load, ev.Kind);
+        Assert.False(ev.IsPlay);
+        Assert.Equal(1, ev.Entry!.Index);
+    }
+
+    [Fact]
+    public void A_restart_right_after_the_last_chunk_is_a_loop()
+    {
+        // Observed: looping ambience reads its final short chunk, then its first chunk again in the same tick.
+        var r = new ReadInterpreter(Index());
+        r.Process("test.sabs", 0x3800, 0x8000, T0);
+        r.Process("test.sabs", 0xB800, 0x8123, T0.AddSeconds(3));          // reaches B's end (0x13923)
+        var again = r.Process("test.sabs", 0x3800, 0x8000, T0.AddSeconds(3.01))!;
+        Assert.Equal(SpotKind.Loop, again.Kind);
+        Assert.False(again.IsPlay);
+    }
+
+    [Fact]
+    public void Streaming_pattern_from_the_real_game_reports_one_play()
+    {
+        // 128 KB chunks from the sound's first byte, two at once to prebuffer, then about one per second.
+        var big = new SpotEntry("music.sabs", 0, 0x1, 0x800, 1_000_000, TimeSpan.FromSeconds(6), @"sound\mus\x.snd");
+        var index = new BankIndex();
+        index.Add(new BankMap("music.sabs", true, [big]));
+        var r = new ReadInterpreter(index);
+        var kinds = new List<SpotKind>();
+        for (var chunk = 0; chunk * 131072 < big.Size; chunk++)
+        {
+            var at = T0.AddSeconds(chunk < 2 ? 0 : chunk - 1);
+            kinds.Add(r.Process("music.sabs", big.Offset + chunk * 131072L, Math.Min(131072, big.Size - chunk * 131072L), at)!.Kind);
+        }
+        Assert.Equal(SpotKind.Start, kinds[0]);
+        Assert.All(kinds.Skip(1), k => Assert.Equal(SpotKind.Continue, k));
+    }
+
+    [Fact]
     public void Reads_of_other_files_are_ignored()
     {
         var r = new ReadInterpreter(Index());

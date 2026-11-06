@@ -12,6 +12,10 @@ public enum SpotKind
     Bulk,
     /// <summary>Header, padding, entry table or checksums.</summary>
     Metadata,
+    /// <summary>A loaded-bank (<c>.sabl</c>) sound read into memory at level load; says nothing about playback.</summary>
+    Load,
+    /// <summary>A sound restarting right after its last chunk was read: a looping sound (ambience, music).</summary>
+    Loop,
 }
 
 public sealed record SpotEvent(SpotKind Kind, DateTime Time, BankMap Bank, SpotEntry? Entry, long Offset, long Length, int SoundCount, string Process)
@@ -25,6 +29,7 @@ public sealed record SpotEvent(SpotKind Kind, DateTime Time, BankMap Bank, SpotE
         {
             SpotKind.Bulk => $"{t}  [bulk ] {Bank.Name}: {SoundCount} sounds in one {Length / 1024.0:0} KB read",
             SpotKind.Metadata => $"{t}  [meta ] {Bank.Name} @0x{Offset:X} +{Length}",
+            SpotKind.Load => $"{t}  [load ] {Bank.Name}: {Entry?.DisplayName}",
             _ => $"{t}  [{Label(Kind)}] {Entry!.DisplayName,-48} {Entry.Duration.TotalSeconds,6:0.00}s  {Bank.Name} #{Entry.Index + 1}" +
                  (Kind == SpotKind.Continue ? $"  @+{Offset - Entry.Offset} ({Length / 1024.0:0} KB)" : $"  ({Length / 1024.0:0} KB read)") +
                  (Kind != SpotKind.Continue && Entry.Name is { } n ? $"\n               {n}" : ""),
@@ -35,6 +40,7 @@ public sealed record SpotEvent(SpotKind Kind, DateTime Time, BankMap Bank, SpotE
     {
         SpotKind.Start => "play ",
         SpotKind.StartMidway => "play~",
+        SpotKind.Loop => "loop ",
         _ => "cont ",
     };
 }
@@ -45,7 +51,7 @@ public sealed record SpotEvent(SpotKind Kind, DateTime Time, BankMap Bank, SpotE
 public sealed class ReadInterpreter
 {
     private readonly BankIndex _index;
-    private readonly Dictionary<(string Bank, int Index), DateTime> _lastTouched = new();
+    private readonly Dictionary<(string Bank, int Index), (DateTime Time, long Start, long End)> _lastTouched = new();
 
     public ReadInterpreter(BankIndex index) => _index = index;
 
@@ -68,7 +74,6 @@ public sealed class ReadInterpreter
             return new SpotEvent(SpotKind.Metadata, time, bank, null, offset, length, 0, process);
         if (hits.Count > BulkThreshold)
         {
-            foreach (var h in hits) _lastTouched[(bank.Name, h.Index)] = time;
             return new SpotEvent(SpotKind.Bulk, time, bank, null, offset, length, hits.Count, process);
         }
 
@@ -76,11 +81,22 @@ public sealed class ReadInterpreter
         // previous sound's tail, and read-ahead may spill into the next sound.
         var end = offset + length;
         var primary = hits.MaxBy(h => Math.Min(end, h.End) - Math.Max(offset, h.Offset))!;
-        var key = (bank.Name, primary.Index);
-        var recent = _lastTouched.TryGetValue(key, out var last) && time - last <= IdleGap + primary.Duration;
-        foreach (var h in hits) _lastTouched[(bank.Name, h.Index)] = time;
 
-        var kind = offset <= primary.Offset + StartSlack ? SpotKind.Start
+        // Observed in Plutonium: .sabl banks are read one sound per read, all at level load.
+        if (!bank.Streamed)
+            return new SpotEvent(SpotKind.Load, time, bank, primary, offset, length, hits.Count, process);
+
+        // Observed: the game streams each .sabs sound in 128 KB chunks starting exactly at its first byte
+        // (two chunks at once to prebuffer), then one chunk about every second while it plays.
+        var key = (bank.Name, primary.Index);
+        var seen = _lastTouched.TryGetValue(key, out var last);
+        var recent = seen && time - last.Time <= IdleGap + primary.Duration;
+        // A loop is a restart right after a *later* chunk reached the end. A sound small enough to fit in one
+        // read can't be told apart from a quick re-trigger, so that counts as a new play.
+        var reachedEnd = seen && time - last.Time <= IdleGap && last.End >= primary.End && last.Start > primary.Offset + StartSlack;
+        _lastTouched[key] = (time, offset, end);
+
+        var kind = offset <= primary.Offset + StartSlack ? (reachedEnd ? SpotKind.Loop : SpotKind.Start)
             : recent ? SpotKind.Continue
             : SpotKind.StartMidway;
         return new SpotEvent(kind, time, bank, primary, offset, length, hits.Count, process);
