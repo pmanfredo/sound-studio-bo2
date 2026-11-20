@@ -59,7 +59,7 @@ Copy-Item (Join-Path $root "THIRD-PARTY-NOTICES.md") $publish
 
 Step "Packing installer"
 New-Item -ItemType Directory -Force $releases | Out-Null
-vpk pack --packId $packId --packVersion $Version --packDir $publish --mainExe SoundStudio.exe `
+vpk pack --packId $packId --packVersion $Version --runtime win-x64 --packDir $publish --mainExe SoundStudio.exe `
     --packTitle "Sound Studio" --packAuthors "Sound Studio" --icon (Join-Path $root "src\SoundStudio.App\Assets\app.ico") `
     --outputDir $releases
 if ($LASTEXITCODE -ne 0) { throw "vpk pack failed." }
