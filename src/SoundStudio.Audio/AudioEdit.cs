@@ -75,6 +75,33 @@ public static class AudioEdit
         return new DecodedAudio(output, audio.SampleRate, audio.Channels);
     }
 
+    /// <summary>
+    /// Changes the volume by <paramref name="gainDb"/> decibels. With <paramref name="preventClipping"/>, a boost
+    /// is reduced so the loudest sample stays at −0.5 dBFS instead of distorting. Returns the gain actually used.
+    /// </summary>
+    public static (DecodedAudio Audio, double AppliedDb) ApplyGain(DecodedAudio audio, double gainDb, bool preventClipping = true)
+    {
+        if (Math.Abs(gainDb) < 0.01)
+            return (audio, 0);
+        var applied = gainDb;
+        if (preventClipping && gainDb > 0)
+        {
+            var headroom = -0.5 - PeakDb(audio); // how far the loudest sample can go up
+            if (!double.IsInfinity(headroom))
+                applied = Math.Min(gainDb, Math.Max(0, headroom));
+        }
+        if (Math.Abs(applied) < 0.01)
+            return (audio, 0);
+
+        var factor = Math.Pow(10, applied / 20);
+        var input = MemoryMarshal.Cast<byte, short>(audio.Pcm16.AsSpan());
+        var output = new byte[audio.Pcm16.Length];
+        var outSamples = MemoryMarshal.Cast<byte, short>(output.AsSpan());
+        for (var i = 0; i < input.Length; i++)
+            outSamples[i] = (short)Math.Clamp(Math.Round(input[i] * factor), short.MinValue, short.MaxValue);
+        return (new DecodedAudio(output, audio.SampleRate, audio.Channels), applied);
+    }
+
     /// <summary>Peak level of the clip in dBFS (−∞ for silence).</summary>
     public static double PeakDb(DecodedAudio audio)
     {

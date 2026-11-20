@@ -425,6 +425,8 @@ test-results/
 # Mac bundle stuff
 *.dmg
 *.app
+# ...but not our WPF project folder (Windows matches *.app case-insensitively)
+!src/SoundStudio.App/
 
 # content below from: https://github.com/github/gitignore/blob/master/Global/macOS.gitignore
 # General

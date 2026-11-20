@@ -12,6 +12,12 @@ public sealed record ConvertOptions
 
     /// <summary>Remove silence at the very start (common in recordings).</summary>
     public bool TrimLeadingSilence { get; init; }
+
+    /// <summary>Volume change in decibels (0 = unchanged).</summary>
+    public double GainDb { get; init; }
+
+    /// <summary>Reduce a boost if it would make the loudest part distort.</summary>
+    public bool PreventClipping { get; init; } = true;
 }
 
 /// <summary>A sound converted to exactly what a bank entry needs, ready to stage.</summary>
@@ -23,6 +29,12 @@ public sealed record PreparedReplacement(
     AudioFormat Format,
     TimeSpan SourceDuration)
 {
+    /// <summary>The options this was made with (so trimming keeps the volume and vice versa).</summary>
+    public ConvertOptions Options { get; init; } = new();
+
+    /// <summary>Volume change actually applied (may be less than asked, to avoid distortion).</summary>
+    public double AppliedGainDb { get; init; }
+
     public TimeSpan Duration => Audio.Duration;
 }
 
@@ -56,6 +68,8 @@ public static class ReplacementEncoder
     {
         options ??= new ConvertOptions();
         var audio = Convert(source, sampleRate, channels);
+        var (gained, appliedDb) = AudioEdit.ApplyGain(audio, options.GainDb, options.PreventClipping);
+        audio = gained;
         if (options.TrimLeadingSilence)
             audio = TrimSilenceStart(audio);
         if (options.TrimTo is { } limit && audio.Duration > limit)
@@ -69,7 +83,11 @@ public static class ReplacementEncoder
             ? FlacEncoder.Encode(samples, channels, sampleRate)
             : audio.Pcm16; // headerless PCM
 
-        return new PreparedReplacement(label, audio, encoded, audio.FrameCount, targetFormat, source.Duration);
+        return new PreparedReplacement(label, audio, encoded, audio.FrameCount, targetFormat, source.Duration)
+        {
+            Options = options,
+            AppliedGainDb = appliedDb,
+        };
     }
 
     /// <summary>Decodes a file: built-in FLAC decoder, Windows codecs, then ffmpeg as a last resort.</summary>

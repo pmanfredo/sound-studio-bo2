@@ -70,6 +70,34 @@ public class AudioDecoderTests
         Assert.Throws<NotSupportedException>(() => AudioDecoder.Decode(new byte[10], AudioFormat.Xma4, 1, 48000));
     }
 
+    /// <summary>
+    /// Regression: after a sound plays to the end, Play must start it over, even if Stop was pressed
+    /// while it was already stopped (that used to swallow the "ended" signal). Plays silence at volume 0.
+    /// </summary>
+    [SkippableFact]
+    public async Task Player_starts_over_after_the_end()
+    {
+        Skip.If(NAudio.Wave.WaveOut.DeviceCount == 0, "No audio output device.");
+        var audio = new DecodedAudio(new byte[48000 * 2 / 5], 48000, 1); // 0.2 s of silence
+        using var player = new AudioPlayer { Volume = 0 };
+        var ended = 0;
+        player.PlaybackEnded += (_, _) => Interlocked.Increment(ref ended);
+        player.Load(audio);
+
+        player.Stop();      // stopping while already stopped must not break the next end
+        for (var round = 1; round <= 2; round++)
+        {
+            player.Play();
+            Assert.True(player.IsPlaying);
+            var until = DateTime.UtcNow.AddSeconds(3);
+            while (Volatile.Read(ref ended) < round && DateTime.UtcNow < until)
+                await Task.Delay(20);
+            Assert.Equal(round, Volatile.Read(ref ended));
+            Assert.False(player.IsPlaying);
+            Assert.Equal(TimeSpan.Zero, player.Position); // back at the start, ready to play again
+        }
+    }
+
     [SkippableFact]
     public void Player_loads_seeks_and_unloads()
     {

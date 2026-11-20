@@ -1,0 +1,170 @@
+<ui:FluentWindow x:Class="SoundStudio.App.SyncWindow"
+                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                 xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+                 xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+                 xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                 xmlns:vm="clr-namespace:SoundStudio.App.ViewModels"
+                 xmlns:sync="clr-namespace:SoundStudio.Sync;assembly=SoundStudio.Sync"
+                 mc:Ignorable="d"
+                 d:DataContext="{d:DesignInstance vm:SyncViewModel}"
+                 Title="Share with friends"
+                 Width="720" Height="720" MinWidth="600" MinHeight="560"
+                 WindowStartupLocation="CenterOwner"
+                 ExtendsContentIntoTitleBar="True"
+                 WindowBackdropType="Mica"
+                 ShowInTaskbar="False">
+    <Grid x:Name="RootGrid">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <ui:TitleBar Grid.Row="0" Title="Share with friends" ShowMaximize="False" ShowMinimize="False">
+            <ui:TitleBar.Icon>
+                <ui:SymbolIcon Symbol="People24" />
+            </ui:TitleBar.Icon>
+        </ui:TitleBar>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="22,4,22,22">
+
+                <!-- Status -->
+                <Border CornerRadius="8" Padding="16,12" Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                    <DockPanel>
+                        <Ellipse x:Name="StatusDot" DockPanel.Dock="Left" Width="12" Height="12" Margin="0,0,12,0" VerticalAlignment="Center" Fill="Gray" />
+                        <ui:Button DockPanel.Dock="Right" Content="Sync now" Icon="{ui:SymbolIcon ArrowSync24}" Command="{Binding SyncNowCommand}"
+                                   Visibility="{Binding IsOff, Converter={StaticResource InverseBoolToVisibility}}" />
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="{Binding StatusText}" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding DetailText}" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                    </DockPanel>
+                </Border>
+
+                <!-- Your name -->
+                <DockPanel Margin="0,14,0,0">
+                    <TextBlock DockPanel.Dock="Left" Text="Your name" VerticalAlignment="Center" Width="110" />
+                    <ui:TextBox Text="{Binding DisplayName, UpdateSourceTrigger=LostFocus}" PlaceholderText="Shown to friends next to your changes" />
+                </DockPanel>
+
+                <TextBlock Text="{Binding ErrorText}" Foreground="{StaticResource ErrorTextBrush}" TextWrapping="Wrap" Margin="0,10,0,0"
+                           Visibility="{Binding ErrorText, Converter={StaticResource NullToVisibility}}" />
+
+                <!-- OFF: host or join -->
+                <UniformGrid Columns="2" Margin="0,16,0,0" Visibility="{Binding IsOff, Converter={StaticResource BoolToVisibility}}">
+                    <ui:Card Margin="0,0,8,0" Padding="18" VerticalAlignment="Stretch">
+                        <StackPanel>
+                            <ui:SymbolIcon Symbol="Server24" FontSize="28" HorizontalAlignment="Left" />
+                            <TextBlock Text="Host" FontSize="18" FontWeight="SemiBold" Margin="0,8,0,4" />
+                            <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                       Text="Your PC keeps the shared changes. You get an invite code to send to your friend. Works on your home network, over Tailscale, or over the internet." />
+                            <ui:Button Content="Start hosting" Appearance="Primary" Icon="{ui:SymbolIcon Play24}" Margin="0,14,0,0"
+                                       Command="{Binding StartHostingCommand}" IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
+                            <TextBlock Margin="0,10,0,0" FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                                       Text="Windows may ask whether to allow Sound Studio on private networks. Click Allow." />
+                        </StackPanel>
+                    </ui:Card>
+                    <ui:Card Margin="8,0,0,0" Padding="18" VerticalAlignment="Stretch">
+                        <StackPanel>
+                            <ui:SymbolIcon Symbol="PersonAdd24" FontSize="28" HorizontalAlignment="Left" />
+                            <TextBlock Text="Join" FontSize="18" FontWeight="SemiBold" Margin="0,8,0,4" />
+                            <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                       Text="Paste the invite code your friend sent you." />
+                            <ui:TextBox Margin="0,10,0,0" PlaceholderText="SS1.…" Text="{Binding JoinCodeText, UpdateSourceTrigger=PropertyChanged}"
+                                        TextWrapping="Wrap" MaxHeight="90" FontFamily="Consolas" FontSize="12" />
+                            <ui:Button Content="Join" Appearance="Primary" Icon="{ui:SymbolIcon ArrowEnterLeft24}" Margin="0,10,0,0"
+                                       Command="{Binding JoinCommand}" />
+                        </StackPanel>
+                    </ui:Card>
+                </UniformGrid>
+
+                <!-- HOST -->
+                <StackPanel Margin="0,16,0,0" Visibility="{Binding IsHost, Converter={StaticResource BoolToVisibility}}">
+                    <TextBlock Text="Invite code" Style="{StaticResource SectionLabel}" />
+                    <ui:TextBox Text="{Binding InviteCode, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" FontFamily="Consolas" FontSize="12" MaxHeight="90" />
+                    <WrapPanel Margin="0,8,0,0">
+                        <ui:Button Content="Copy invite code" Appearance="Primary" Icon="{ui:SymbolIcon Copy24}" Margin="0,0,8,0" Command="{Binding CopyInviteCommand}" />
+                        <ui:Button Content="New code" Icon="{ui:SymbolIcon KeyReset24}" ToolTip="Make a new secret; the old code stops working" Command="{Binding ResetInviteCommand}" />
+                    </WrapPanel>
+                    <TextBlock Margin="0,6,0,0" FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                               Text="The code is a password: only send it to people you trust with your sounds." />
+
+                    <TextBlock Text="Your friend can reach you via" Style="{StaticResource SectionLabel}" Margin="0,16,0,6" />
+                    <ItemsControl ItemsSource="{Binding Routes}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate DataType="{x:Type vm:RouteItem}">
+                                <StackPanel Orientation="Horizontal" Margin="0,2">
+                                    <ui:SymbolIcon Symbol="{Binding Icon}" Margin="0,0,8,0" />
+                                    <TextBlock Text="{Binding Label}" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <!-- Optional: a stable address the user already has (named tunnel / reverse proxy) -->
+                    <Border Margin="0,12,0,0" CornerRadius="8" Padding="14,10" Background="{DynamicResource CardBackgroundFillColorDefaultBrush}">
+                        <StackPanel>
+                            <TextBlock Text="Your own internet address (optional)" FontWeight="SemiBold" />
+                            <TextBlock Margin="0,4,0,8" FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorSecondaryBrush}">
+                                <Run Text="If you have a domain with a Cloudflare tunnel or reverse proxy, point a hostname at" />
+                                <Run Text="{Binding ForwardTarget, Mode=OneWay}" FontFamily="Consolas" />
+                                <Run Text="and enter it here. Invite codes then keep working over the internet without resending. Leave empty if you don't have one." />
+                            </TextBlock>
+                            <DockPanel>
+                                <ui:Button DockPanel.Dock="Right" Content="Check" Margin="8,0,0,0" Icon="{ui:SymbolIcon CheckmarkCircle24}"
+                                           Command="{Binding CheckPublicAddressCommand}" />
+                                <ui:TextBox PlaceholderText="sounds.example.com" Text="{Binding PublicAddress, UpdateSourceTrigger=LostFocus}" />
+                            </DockPanel>
+                            <TextBlock Margin="0,6,0,0" TextWrapping="Wrap" Text="{Binding PublicAddressStatus}"
+                                       Visibility="{Binding PublicAddressStatus, Converter={StaticResource NullToVisibility}}" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Margin="0,12,0,0" CornerRadius="8" Padding="14,10" Background="{DynamicResource CardBackgroundFillColorDefaultBrush}">
+                        <StackPanel>
+                            <ui:ToggleSwitch Content="Also share over the internet (Cloudflare quick tunnel)" IsChecked="{Binding ShareOverInternet}" />
+                            <TextBlock Margin="0,6,0,0" FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                       Text="For friends who aren't on your network or Tailscale. No account or port forwarding needed; the address changes each time." />
+                            <TextBlock Margin="0,6,0,0" TextWrapping="Wrap" Text="{Binding TunnelStatus}"
+                                       Visibility="{Binding TunnelStatus, Converter={StaticResource NullToVisibility}}" />
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock Text="Connected friends" Style="{StaticResource SectionLabel}" Margin="0,16,0,6" />
+                    <TextBlock Text="Nobody yet. Send the invite code." Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                               x:Name="NoPeers" />
+                    <ItemsControl ItemsSource="{Binding Peers}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate DataType="{x:Type sync:PeerInfo}">
+                                <StackPanel Orientation="Horizontal" Margin="0,2">
+                                    <ui:SymbolIcon Symbol="Person24" Margin="0,0,8,0" />
+                                    <TextBlock Text="{Binding Name}" VerticalAlignment="Center" FontWeight="SemiBold" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+
+                <!-- HOST or JOINED: common actions -->
+                <StackPanel Margin="0,18,0,0" Visibility="{Binding IsOff, Converter={StaticResource InverseBoolToVisibility}}">
+                    <CheckBox Content="Apply friends' sounds to the game automatically" IsChecked="{Binding AutoApplyIncoming}"
+                              ToolTip="Off: their sounds wait under Pending changes so you can listen first" />
+                    <WrapPanel Margin="0,12,0,0">
+                        <ui:Button Content="Send all my modified sounds" Icon="{ui:SymbolIcon Send24}" Margin="0,0,8,8"
+                                   ToolTip="Share everything you've already changed, e.g. after a friend first joins"
+                                   Command="{Binding ShareAllCommand}" />
+                        <ui:Button Content="Stop hosting" Icon="{ui:SymbolIcon Stop24}" Margin="0,0,8,8" Command="{Binding StopCommand}"
+                                   Visibility="{Binding IsHost, Converter={StaticResource BoolToVisibility}}" />
+                        <ui:Button Content="Leave" Icon="{ui:SymbolIcon SignOut24}" Margin="0,0,8,8" Command="{Binding StopCommand}"
+                                   Visibility="{Binding IsJoined, Converter={StaticResource BoolToVisibility}}" />
+                    </WrapPanel>
+                </StackPanel>
+
+                <TextBlock Margin="0,18,0,0" FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                           Text="How it works: when you click Apply to game, the new sounds are sent to everyone you sync with. Their copies wait under Pending changes until they apply them. Only the changed sounds travel, never whole game files." />
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</ui:FluentWindow>

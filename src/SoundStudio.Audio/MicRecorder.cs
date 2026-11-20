@@ -18,6 +18,7 @@ public sealed class MicRecorder : IDisposable
     public static readonly TimeSpan MaxLength = TimeSpan.FromMinutes(10);
 
     private readonly IWaveIn _capture;
+    private readonly MMDevice? _device;
     private readonly object _lock = new();
     private readonly List<float> _samples = [];
     private bool _recording;
@@ -30,8 +31,29 @@ public sealed class MicRecorder : IDisposable
     public event EventHandler<Exception?>? DeviceStopped;
 
     public MicRecorder(MicDevice device)
-        : this(CreateCapture(device))
+        : this(CreateCapture(device, out var endpoint))
     {
+        _device = endpoint;
+    }
+
+    /// <summary>
+    /// The microphone's input level (0..1), the same setting as in Windows sound settings. Null if the
+    /// device doesn't expose one.
+    /// </summary>
+    public float? DeviceLevel
+    {
+        get
+        {
+            try { return _device?.AudioEndpointVolume.MasterVolumeLevelScalar; }
+            catch (System.Runtime.InteropServices.COMException) { return null; }
+        }
+        set
+        {
+            if (_device == null || value == null)
+                return;
+            try { _device.AudioEndpointVolume.MasterVolumeLevelScalar = Math.Clamp(value.Value, 0f, 1f); }
+            catch (System.Runtime.InteropServices.COMException) { }
+        }
     }
 
     /// <summary>For tests: any <see cref="IWaveIn"/> source.</summary>
@@ -70,10 +92,10 @@ public sealed class MicRecorder : IDisposable
             .ToList();
     }
 
-    private static IWaveIn CreateCapture(MicDevice device)
+    private static IWaveIn CreateCapture(MicDevice device, out MMDevice endpoint)
     {
         using var enumerator = new MMDeviceEnumerator();
-        var endpoint = enumerator.GetDevice(device.Id);
+        endpoint = enumerator.GetDevice(device.Id);
         return new WasapiCapture(endpoint) { ShareMode = AudioClientShareMode.Shared };
     }
 
@@ -177,5 +199,6 @@ public sealed class MicRecorder : IDisposable
         try { _capture.StopRecording(); }
         catch (Exception ex) when (ex is InvalidOperationException or System.Runtime.InteropServices.COMException) { }
         _capture.Dispose();
+        _device?.Dispose();
     }
 }

@@ -2,6 +2,25 @@ using System.Security.Cryptography;
 using SoundStudio.Core.Bo2;
 
 if (args.Length == 4 && args[0] == "dump") { using var db = SabBank.Open(args[1]); var de = int.TryParse(args[2], out var di) ? db.Entries[di] : db.Entries.First(x => x.DisplayName.Contains(args[2])); File.WriteAllBytes(args[3], de.ReadOriginalData()); Console.WriteLine($"{de} samples={de.SampleCount} ch={de.ChannelCount} size={de.Size} head={Convert.ToHexString(de.ReadOriginalData(), 0, 48)}"); return; }
+if (args.Length == 2 && args[0] == "types")
+{
+    var counts = new Dictionary<string, int>();
+    foreach (var f in Directory.EnumerateFiles(args[1]).Where(f => f.EndsWith(".sabs") || f.EndsWith(".sabl")))
+    {
+        using var tb = SabBank.Open(f);
+        foreach (var te in tb.Entries)
+        {
+            var path = te.Name?.ToLowerInvariant().Replace('/', '\\') ?? "(unknown)";
+            var parts = path.Split('\\');
+            var i = Array.IndexOf(parts, "sound");
+            var key = i >= 0 && i + 2 < parts.Length ? parts[i + 1] + "\\" + parts[i + 2] : path == "(unknown)" ? path : "(other)";
+            counts[key] = counts.GetValueOrDefault(key) + 1;
+        }
+    }
+    foreach (var kv in counts.OrderByDescending(k => k.Value).Take(80))
+        Console.WriteLine($"{kv.Value,6} {kv.Key}");
+    return;
+}
 if (args.Length == 2 && args[0] == "peek") { Peek(args[1]); return; }
 if (args.Length == 3 && args[0] is "edit" or "rawedit") { DevEdit(args); return; }
 

@@ -1,0 +1,653 @@
+﻿<ui:FluentWindow x:Class="SoundStudio.App.MainWindow"
+                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                 xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+                 xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+                 xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                 xmlns:vm="clr-namespace:SoundStudio.App.ViewModels"
+                 xmlns:controls="clr-namespace:SoundStudio.App.Controls"
+                 mc:Ignorable="d"
+                 d:DataContext="{d:DesignInstance vm:MainViewModel}"
+                 Title="Sound Studio"
+                 Icon="pack://application:,,,/Assets/app.png"
+                 Width="1440" Height="880" MinWidth="1024" MinHeight="600"
+                 WindowStartupLocation="CenterScreen"
+                 ExtendsContentIntoTitleBar="True"
+                 WindowBackdropType="Mica"
+                 WindowCornerPreference="Round">
+
+    <Grid x:Name="RootGrid">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- Title bar -->
+        <ui:TitleBar Grid.Row="0" Title="Sound Studio · Black Ops II">
+            <ui:TitleBar.Icon>
+                <ui:SymbolIcon Symbol="HeadphonesSoundWave24" />
+            </ui:TitleBar.Icon>
+        </ui:TitleBar>
+
+        <!-- Toolbar -->
+        <Grid Grid.Row="1" Margin="16,4,16,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" MinWidth="300" MaxWidth="620" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <ui:TextBox x:Name="SearchBox" Grid.Column="0"
+                        PlaceholderText="Search every sound: name, ID or bank  (Ctrl+F)"
+                        Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                        ClearButtonEnabled="True">
+                <ui:TextBox.Icon>
+                    <ui:SymbolIcon Symbol="Search24" />
+                </ui:TextBox.Icon>
+                <ui:TextBox.InputBindings>
+                    <KeyBinding Key="Escape" Command="{Binding ClearSearchCommand}" />
+                </ui:TextBox.InputBindings>
+            </ui:TextBox>
+
+            <ToggleButton Grid.Column="1" Margin="10,0,0,0" Padding="12,6"
+                          IsChecked="{Binding ModifiedOnly}"
+                          ToolTip="Only show sounds that differ from the original game audio">
+                <StackPanel Orientation="Horizontal">
+                    <ui:SymbolIcon Symbol="Edit24" Margin="0,0,6,0" Foreground="{StaticResource ModifiedBrush}" />
+                    <TextBlock Text="Modified only" VerticalAlignment="Center" />
+                </StackPanel>
+            </ToggleButton>
+
+            <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+                <ui:Button Margin="0,0,16,0" Command="{Binding OpenSyncCommand}" ToolTip="Share sounds with friends (host or join)">
+                    <StackPanel Orientation="Horizontal">
+                        <ui:SymbolIcon Symbol="People24" Margin="0,0,6,0" />
+                        <TextBlock Text="{Binding Sync.ChipText}" VerticalAlignment="Center" />
+                        <Ellipse Width="8" Height="8" Margin="8,0,0,0" VerticalAlignment="Center" Fill="#3FB950"
+                                 Visibility="{Binding Sync.IsConnected, Converter={StaticResource BoolToVisibility}}" />
+                    </StackPanel>
+                </ui:Button>
+                <ui:SymbolIcon Symbol="Folder24" Margin="0,0,6,0" Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+                <TextBlock Text="{Binding SoundFolder}" MaxWidth="360" TextTrimming="CharacterEllipsis"
+                           VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                           ToolTip="{Binding SoundFolder}" />
+                <ui:Button Margin="10,0,0,0" Content="Change…" Icon="{ui:SymbolIcon FolderOpen24}"
+                           Command="{Binding ChooseFolderCommand}" />
+                <ui:Button Margin="6,0,0,0" Icon="{ui:SymbolIcon ArrowSync24}" ToolTip="Rescan the sound folder (F5)"
+                           Command="{Binding RescanCommand}" />
+            </StackPanel>
+        </Grid>
+
+        <!-- Main content -->
+        <Grid Grid.Row="2" Margin="12,0,12,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="300" MinWidth="200" />
+                <ColumnDefinition Width="8" />
+                <ColumnDefinition Width="*" MinWidth="400" />
+                <ColumnDefinition Width="12" />
+                <ColumnDefinition Width="340" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Library tree -->
+            <Border Grid.Column="0" CornerRadius="8" Padding="4"
+                    Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                <TreeView x:Name="LibraryTree" ItemsSource="{Binding Tree}"
+                          SelectedItemChanged="LibraryTree_SelectedItemChanged">
+                    <TreeView.ItemContainerStyle>
+                        <Style TargetType="TreeViewItem" BasedOn="{StaticResource {x:Type TreeViewItem}}">
+                            <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
+                            <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
+                            <Setter Property="ToolTip" Value="{Binding ToolTip}" />
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        </Style>
+                    </TreeView.ItemContainerStyle>
+                    <TreeView.ItemTemplate>
+                        <HierarchicalDataTemplate DataType="{x:Type vm:LibraryNodeViewModel}" ItemsSource="{Binding Children}">
+                            <DockPanel LastChildFill="True" Margin="0,1">
+                                <ui:SymbolIcon DockPanel.Dock="Left" Symbol="{Binding Icon}" Margin="0,0,8,0" FontSize="16"
+                                               VerticalAlignment="Center" />
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Margin="8,0,4,0" VerticalAlignment="Center">
+                                    <Border Style="{StaticResource PendingPill}" Padding="5,0" Margin="0,0,6,0"
+                                            Visibility="{Binding HasPendingRows, Converter={StaticResource BoolToVisibility}}"
+                                            ToolTip="Staged changes in here">
+                                        <TextBlock Text="{Binding PendingCount}" FontSize="11" Foreground="{StaticResource PendingBrush}" />
+                                    </Border>
+                                    <Border Style="{StaticResource ModifiedPill}" Padding="5,0" Margin="0,0,6,0"
+                                            Visibility="{Binding HasModified, Converter={StaticResource BoolToVisibility}}"
+                                            ToolTip="Modified sounds in here">
+                                        <TextBlock Text="{Binding ModifiedCount}" FontSize="11" Foreground="{StaticResource ModifiedBrush}" />
+                                    </Border>
+                                    <TextBlock Text="{Binding CountText}" FontSize="12"
+                                               Foreground="{DynamicResource TextFillColorTertiaryBrush}" VerticalAlignment="Center" />
+                                </StackPanel>
+                                <StackPanel VerticalAlignment="Center">
+                                    <TextBlock x:Name="NodeTitle" Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Text="{Binding Subtitle}" FontSize="11" TextTrimming="CharacterEllipsis"
+                                               Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                                               Visibility="{Binding Subtitle, Converter={StaticResource NullToVisibility}}" />
+                                </StackPanel>
+                            </DockPanel>
+                            <HierarchicalDataTemplate.Triggers>
+                                <DataTrigger Binding="{Binding IsAccent}" Value="True">
+                                    <Setter TargetName="NodeTitle" Property="Foreground" Value="{StaticResource ModifiedBrush}" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding IsPendingNode}" Value="True">
+                                    <Setter TargetName="NodeTitle" Property="Foreground" Value="{StaticResource PendingBrush}" />
+                                </DataTrigger>
+                            </HierarchicalDataTemplate.Triggers>
+                        </HierarchicalDataTemplate>
+                    </TreeView.ItemTemplate>
+                </TreeView>
+            </Border>
+
+            <GridSplitter Grid.Column="1" Width="8" HorizontalAlignment="Stretch" Background="Transparent" />
+
+            <!-- Sound list -->
+            <Grid Grid.Column="2">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <DockPanel Grid.Row="0" Margin="4,0,0,6" LastChildFill="True">
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                        <ui:Button Content="Replace from folder…" Icon="{ui:SymbolIcon FolderArrowUp24}" Margin="8,0,0,0" Padding="10,4"
+                                   ToolTip="Replace many sounds at once with files named after them (also: drop files or a folder on the list)"
+                                   Command="{Binding ReplaceFromFolderCommand}" />
+                        <ui:Button Content="Import originals…" Icon="{ui:SymbolIcon Archive24}" Margin="8,0,0,0" Padding="10,4"
+                                   ToolTip="Recover the original audio for modified sounds from a clean copy of the game"
+                                   Command="{Binding ImportOriginalsCommand}"
+                                   Visibility="{Binding MissingOriginalsCount, Converter={StaticResource NonZeroToVisibility}}" />
+                        <ui:Button Margin="8,0,0,0" Padding="10,4" Icon="{ui:SymbolIcon ArrowUndo24}"
+                                   ToolTip="Put every modified sound in this list back to its original audio"
+                                   Command="{Binding RevertVisibleCommand}"
+                                   Visibility="{Binding RevertableVisibleCount, Converter={StaticResource NonZeroToVisibility}}">
+                            <TextBlock>
+                                <Run Text="Revert" /> <Run Text="{Binding RevertableVisibleCount, Mode=OneWay, StringFormat=N0}" /> <Run Text="shown" />
+                            </TextBlock>
+                        </ui:Button>
+                    </StackPanel>
+                    <TextBlock Text="{Binding ResultText}" VerticalAlignment="Center"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                </DockPanel>
+
+                <DataGrid x:Name="SoundGrid" Grid.Row="1" MouseDoubleClick="SoundGrid_MouseDoubleClick"
+                          AllowDrop="True" DragOver="Sounds_DragOver" DragLeave="Sounds_DragLeave" Drop="Sounds_Drop"
+                          ItemsSource="{Binding VisibleRows}"
+                          SelectedItem="{Binding SelectedRow}"
+                          AutoGenerateColumns="False" IsReadOnly="True"
+                          SelectionMode="Single" SelectionUnit="FullRow"
+                          HeadersVisibility="Column" GridLinesVisibility="None"
+                          CanUserResizeRows="False" CanUserAddRows="False" CanUserDeleteRows="False"
+                          EnableRowVirtualization="True" EnableColumnVirtualization="True"
+                          VirtualizingPanel.IsVirtualizing="True"
+                          VirtualizingPanel.VirtualizationMode="Recycling"
+                          RowHeight="34"
+                          HorizontalScrollBarVisibility="Disabled">
+                    <DataGrid.Columns>
+                        <DataGridTemplateColumn Header="Status" SortMemberPath="IsModified" Width="92" MinWidth="80">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate DataType="{x:Type vm:SoundRowViewModel}">
+                                    <Grid>
+                                        <Border Style="{StaticResource ModifiedPill}"
+                                                Visibility="{Binding ShowModifiedPill, Converter={StaticResource BoolToVisibility}}">
+                                            <TextBlock Text="Modified" FontSize="11" Foreground="{StaticResource ModifiedBrush}" />
+                                        </Border>
+                                        <Border Style="{StaticResource PendingPill}"
+                                                Visibility="{Binding HasPending, Converter={StaticResource BoolToVisibility}}">
+                                            <TextBlock Text="Pending" FontSize="11" Foreground="{StaticResource PendingBrush}" />
+                                        </Border>
+                                    </Grid>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="2.4*" MinWidth="180" ElementStyle="{StaticResource GridCellText}" />
+                        <DataGridTextColumn Header="Map" Binding="{Binding MapName}" Width="1.2*" MinWidth="100" ElementStyle="{StaticResource GridCellText}" />
+                        <DataGridTextColumn Header="Bank" Binding="{Binding ShortBankLabel}" Width="1*" MinWidth="100" ElementStyle="{StaticResource GridCellText}" />
+                        <DataGridTextColumn Header="Format" Binding="{Binding FormatName}" Width="72" />
+                        <DataGridTextColumn Header="Length" Binding="{Binding DurationText}" SortMemberPath="DurationSeconds" Width="76" />
+                        <DataGridTextColumn Header="Channels" Binding="{Binding ChannelsText}" Width="88" />
+                        <DataGridTextColumn Header="Size" Binding="{Binding SizeText}" SortMemberPath="SizeBytes" Width="76" />
+                    </DataGrid.Columns>
+                </DataGrid>
+
+                <!-- Drop hint while dragging files -->
+                <Border Grid.Row="1" VerticalAlignment="Top" HorizontalAlignment="Center" Margin="0,44,0,0"
+                        CornerRadius="8" Padding="16,10" IsHitTestVisible="False"
+                        Background="{StaticResource PendingBackgroundBrush}" BorderBrush="{StaticResource PendingBrush}" BorderThickness="1"
+                        Visibility="{Binding DropHint, Converter={StaticResource NullToVisibility}}">
+                    <StackPanel Orientation="Horizontal">
+                        <ui:SymbolIcon Symbol="ArrowDownload24" Margin="0,0,8,0" Foreground="{StaticResource PendingBrush}" />
+                        <TextBlock Text="{Binding DropHint}" FontWeight="SemiBold" />
+                    </StackPanel>
+                </Border>
+
+                <!-- Empty search result -->
+                <StackPanel Grid.Row="1" HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False"
+                            Visibility="{Binding HasNoResults, Converter={StaticResource BoolToVisibility}}">
+                    <ui:SymbolIcon Symbol="Search24" FontSize="40" HorizontalAlignment="Center" Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+                    <TextBlock Text="{Binding EmptyTitle}" FontSize="16" Margin="0,8,0,0" HorizontalAlignment="Center" />
+                    <TextBlock Text="{Binding EmptyHint}"
+                               Foreground="{DynamicResource TextFillColorTertiaryBrush}" HorizontalAlignment="Center" />
+                </StackPanel>
+            </Grid>
+
+            <!-- Details -->
+            <Border Grid.Column="4" CornerRadius="8" Padding="18" AllowDrop="True"
+                    DragOver="Details_DragOver" DragLeave="Sounds_DragLeave" Drop="Details_Drop"
+                    Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                <Grid>
+                    <!-- Nothing selected -->
+                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center"
+                                Visibility="{Binding HasSelection, Converter={StaticResource InverseBoolToVisibility}}">
+                        <ui:SymbolIcon Symbol="MusicNote224" FontSize="40" Foreground="{DynamicResource TextFillColorTertiaryBrush}" HorizontalAlignment="Center" />
+                        <TextBlock Text="Select a sound" FontSize="16" Margin="0,8,0,0" HorizontalAlignment="Center" />
+                        <TextBlock Text="Its details will show up here." HorizontalAlignment="Center"
+                                   Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+                    </StackPanel>
+
+                    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                  Visibility="{Binding HasSelection, Converter={StaticResource BoolToVisibility}}">
+                        <StackPanel Margin="0,0,14,0">
+                            <StackPanel DataContext="{Binding SelectedRow}" d:DataContext="{d:DesignInstance vm:SoundRowViewModel}">
+                                <TextBlock Text="{Binding Name}" FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                <TextBlock Text="{Binding CategoryAndMap}" Margin="0,2,0,0" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+
+                                <!-- Status card -->
+                                <Border Margin="0,14,0,0" CornerRadius="6" Padding="12,10"
+                                        Background="{StaticResource ModifiedBackgroundBrush}"
+                                        Visibility="{Binding IsModified, Converter={StaticResource BoolToVisibility}}">
+                                    <StackPanel>
+                                        <DockPanel>
+                                            <ui:SymbolIcon DockPanel.Dock="Left" Symbol="Edit24" Foreground="{StaticResource ModifiedBrush}" Margin="0,0,10,0" VerticalAlignment="Top" />
+                                            <TextBlock TextWrapping="Wrap">
+                                                <Run Text="Modified" FontWeight="SemiBold" Foreground="{StaticResource ModifiedBrush}" />
+                                                <LineBreak />
+                                                <Run Text="This sound's audio is different from the original game audio." />
+                                            </TextBlock>
+                                        </DockPanel>
+
+                                        <!-- Original saved: one click back -->
+                                        <ui:Button Content="Revert to original" Icon="{ui:SymbolIcon ArrowUndo24}" Margin="0,10,0,0"
+                                                   Appearance="Primary"
+                                                   Command="{Binding DataContext.RevertSelectedCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                   Visibility="{Binding CanRevert, Converter={StaticResource BoolToVisibility}}" />
+
+                                        <!-- Changed before Sound Studio saw it: explain how to get the original back -->
+                                        <StackPanel Margin="0,10,0,0" Visibility="{Binding OriginalMissing, Converter={StaticResource BoolToVisibility}}">
+                                            <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                                       Text="It was changed before Sound Studio saved its original, so it can't be reverted yet. Point Sound Studio at a clean copy of the game to recover it." />
+                                            <ui:Button Content="Import originals…" Icon="{ui:SymbolIcon Archive24}" Margin="0,8,0,0"
+                                                       Command="{Binding DataContext.ImportOriginalsCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+                                <Border Margin="0,14,0,0" CornerRadius="6" Padding="12,10"
+                                        Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                                        Visibility="{Binding IsModified, Converter={StaticResource InverseBoolToVisibility}}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <ui:SymbolIcon Symbol="CheckmarkCircle24" Margin="0,0,10,0" />
+                                        <TextBlock Text="Original game audio" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- Staged replacement -->
+                                <Border Margin="0,10,0,0" CornerRadius="6" Padding="12,10"
+                                        Background="{StaticResource PendingBackgroundBrush}"
+                                        Visibility="{Binding HasPending, Converter={StaticResource BoolToVisibility}}">
+                                    <StackPanel>
+                                        <DockPanel>
+                                            <ui:SymbolIcon DockPanel.Dock="Left" Symbol="ArrowSync24" Foreground="{StaticResource PendingBrush}" Margin="0,0,10,0" VerticalAlignment="Top" />
+                                            <TextBlock TextWrapping="Wrap">
+                                                <Run Text="New audio staged" FontWeight="SemiBold" Foreground="{StaticResource PendingBrush}" />
+                                                <LineBreak />
+                                                <Run Text="{Binding Pending.Summary, Mode=OneWay}" />
+                                            </TextBlock>
+                                        </DockPanel>
+                                        <DockPanel Margin="0,8,0,0" Visibility="{Binding Pending.Warning, Converter={StaticResource NullToVisibility}}">
+                                            <ui:SymbolIcon DockPanel.Dock="Left" Symbol="Warning24" Foreground="{StaticResource ModifiedBrush}" Margin="0,0,10,0" VerticalAlignment="Top" />
+                                            <TextBlock Text="{Binding Pending.Warning}" TextWrapping="Wrap" FontSize="12" />
+                                        </DockPanel>
+                                        <WrapPanel Margin="0,10,0,0">
+                                            <ui:Button Margin="0,0,8,0" Icon="{ui:SymbolIcon Cut24}"
+                                                       Command="{Binding DataContext.TrimSelectedCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                       Visibility="{Binding Pending.IsTooLong, Converter={StaticResource BoolToVisibility}, FallbackValue=Collapsed}">
+                                                <TextBlock>
+                                                    <Run Text="Trim to" /> <Run Text="{Binding Pending.OriginalDurationText, Mode=OneWay}" />
+                                                </TextBlock>
+                                            </ui:Button>
+                                            <ui:Button Content="Discard" Icon="{ui:SymbolIcon Dismiss24}"
+                                                       Command="{Binding DataContext.DiscardSelectedCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
+                                        </WrapPanel>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- Replace -->
+                                <StackPanel Margin="0,12,0,0" Visibility="{Binding CanReplace, Converter={StaticResource BoolToVisibility}}">
+                                    <ui:Button HorizontalAlignment="Stretch" Icon="{ui:SymbolIcon Mic24}" Margin="0,0,0,8"
+                                               Content="Record your own…"
+                                               Command="{Binding DataContext.RecordSelectedCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                               ToolTip="Record a new version with your microphone (Ctrl+Shift+R)" />
+                                    <ui:Button HorizontalAlignment="Stretch" Icon="{ui:SymbolIcon ArrowSwap24}"
+                                               Command="{Binding DataContext.ReplaceSelectedCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                               ToolTip="Pick an audio file to replace this sound (Ctrl+R)">
+                                        <Grid>
+                                            <TextBlock Text="Replace with a file…" Visibility="{Binding HasPending, Converter={StaticResource InverseBoolToVisibility}}" />
+                                            <TextBlock Text="Choose a different file…" Visibility="{Binding HasPending, Converter={StaticResource BoolToVisibility}}" />
+                                        </Grid>
+                                    </ui:Button>
+                                    <TextBlock Text="…or drop an audio file on this panel or on the sound in the list." FontSize="12" Margin="0,6,0,0"
+                                               TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+                                </StackPanel>
+
+                                <!-- Volume -->
+                                <Border Margin="0,14,0,0" Visibility="{Binding CanReplace, Converter={StaticResource BoolToVisibility}}">
+                                <StackPanel DataContext="{Binding DataContext, RelativeSource={RelativeSource AncestorType=Window}}">
+                                    <DockPanel>
+                                        <TextBlock DockPanel.Dock="Left" Text="Volume" Style="{StaticResource SectionLabel}" VerticalAlignment="Center" Margin="0" />
+                                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                            <ui:ProgressRing IsIndeterminate="True" Width="14" Height="14" Margin="0,0,6,0"
+                                                             Visibility="{Binding IsAdjustingVolume, Converter={StaticResource BoolToVisibility}}" />
+                                            <TextBlock Text="{Binding VolumeText}" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </DockPanel>
+                                    <DockPanel Margin="0,4,0,0">
+                                        <ui:Button DockPanel.Dock="Left" Content="−" Width="30" Padding="0,2" Command="{Binding NudgeVolumeCommand}" CommandParameter="-1"
+                                                   ToolTip="1 dB quieter" />
+                                        <ui:Button DockPanel.Dock="Right" Content="Reset" Padding="8,2" Margin="6,0,0,0" Command="{Binding ResetVolumeCommand}"
+                                                   ToolTip="Back to the sound's own volume" />
+                                        <ui:Button DockPanel.Dock="Right" Content="+" Width="30" Padding="0,2" Command="{Binding NudgeVolumeCommand}" CommandParameter="1"
+                                                   ToolTip="1 dB louder" />
+                                        <Slider Minimum="-24" Maximum="12" Margin="6,0" VerticalAlignment="Center"
+                                                SmallChange="0.5" LargeChange="3" TickFrequency="3" IsSnapToTickEnabled="False"
+                                                Value="{Binding VolumeDb}" ToolTip="Make this sound quieter or louder (staged; Apply writes it)" />
+                                    </DockPanel>
+                                    <TextBlock Text="{Binding VolumeNote}" FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0"
+                                               Foreground="{StaticResource ModifiedBrush}"
+                                               Visibility="{Binding VolumeNote, Converter={StaticResource NullToVisibility}}" />
+                                </StackPanel>
+                                </Border>
+
+                                <!-- Properties -->
+                                <UniformGrid Columns="2" Margin="0,16,0,0">
+                                    <StackPanel Margin="0,0,8,12">
+                                        <TextBlock Text="Length" Style="{StaticResource SectionLabel}" />
+                                        <TextBlock Text="{Binding DurationText}" />
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,0,12">
+                                        <TextBlock Text="Format" Style="{StaticResource SectionLabel}" />
+                                        <TextBlock Text="{Binding FormatName}" />
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,8,12">
+                                        <TextBlock Text="Channels" Style="{StaticResource SectionLabel}" />
+                                        <TextBlock Text="{Binding ChannelsText}" />
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,0,12">
+                                        <TextBlock Text="Sample rate" Style="{StaticResource SectionLabel}" />
+                                        <TextBlock Text="{Binding SampleRateText}" />
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,8,12">
+                                        <TextBlock Text="Size" Style="{StaticResource SectionLabel}" />
+                                        <TextBlock Text="{Binding SizeText}" />
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,0,12">
+                                        <TextBlock Text="Sound ID" Style="{StaticResource SectionLabel}" />
+                                        <TextBlock Text="{Binding IdHex}" FontFamily="Consolas" />
+                                    </StackPanel>
+                                </UniformGrid>
+
+                                <TextBlock Text="Loops in game" Margin="0,0,0,12"
+                                           Visibility="{Binding LoopText, Converter={StaticResource NullToVisibility}}" />
+
+                                <TextBlock Text="Type" Style="{StaticResource SectionLabel}" />
+                                <TextBlock Text="{Binding TypeText}" Margin="0,0,0,12" TextWrapping="Wrap" />
+
+                                <TextBlock Text="Bank" Style="{StaticResource SectionLabel}" />
+                                <TextBlock Text="{Binding BankLabel}" />
+                                <TextBlock Text="{Binding BankFileName}" FontFamily="Consolas" FontSize="12" Margin="0,2,0,12"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+
+                                <TextBlock Text="Game asset path" Style="{StaticResource SectionLabel}" />
+                                <TextBox Text="{Binding AssetPath, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap"
+                                         FontFamily="Consolas" FontSize="12" />
+                            </StackPanel>
+
+                            <WrapPanel Margin="0,16,0,0">
+                                <ui:Button Content="Copy name" Icon="{ui:SymbolIcon Copy24}" Margin="0,0,8,8"
+                                           Command="{Binding CopyNameCommand}" />
+                                <ui:Button Content="Show bank file" Icon="{ui:SymbolIcon Open24}" Margin="0,0,8,8"
+                                           Command="{Binding ShowInExplorerCommand}" />
+                            </WrapPanel>
+
+                            <!-- History -->
+                            <StackPanel Margin="0,12,0,0" Visibility="{Binding HasSelectedHistory, Converter={StaticResource BoolToVisibility}}">
+                                <TextBlock Text="History" Style="{StaticResource SectionLabel}" Margin="0,0,0,6" />
+                                <ItemsControl ItemsSource="{Binding SelectedHistory}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate DataType="{x:Type vm:HistoryItemViewModel}">
+                                            <DockPanel Margin="0,0,0,10">
+                                                <ui:SymbolIcon DockPanel.Dock="Left" Symbol="{Binding Icon}" Margin="0,2,10,0" VerticalAlignment="Top" />
+                                                <StackPanel>
+                                                    <TextBlock Text="{Binding Title}" />
+                                                    <TextBlock Text="{Binding Subtitle}" FontSize="12" TextWrapping="Wrap"
+                                                               Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+                                                </StackPanel>
+                                            </DockPanel>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+
+            <!-- Loading overlay (first scan) -->
+            <Border Grid.ColumnSpan="5" CornerRadius="8"
+                    Background="{DynamicResource ApplicationBackgroundBrush}"
+                    Visibility="{Binding ShowLoadingOverlay, Converter={StaticResource BoolToVisibility}}">
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Width="440">
+                    <ui:ProgressRing IsIndeterminate="True" HorizontalAlignment="Center" />
+                    <TextBlock Text="Loading your sound library" FontSize="18" FontWeight="SemiBold" Margin="0,16,0,4" HorizontalAlignment="Center" />
+                    <TextBlock Text="{Binding ScanStatus}" HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                    <ProgressBar Value="{Binding ScanProgress}" Maximum="100" Margin="0,12,0,0" />
+                    <TextBlock Text="The first scan checks every sound for changes. Later launches are instant."
+                               FontSize="12" Margin="0,10,0,0" HorizontalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center"
+                               Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+                </StackPanel>
+            </Border>
+
+            <!-- First run: pick the game folder -->
+            <Border Grid.ColumnSpan="5" CornerRadius="8"
+                    Background="{DynamicResource ApplicationBackgroundBrush}"
+                    Visibility="{Binding NeedsFolder, Converter={StaticResource BoolToVisibility}}">
+                <ui:Card HorizontalAlignment="Center" VerticalAlignment="Center" Width="520" Padding="28">
+                    <StackPanel>
+                        <ui:SymbolIcon Symbol="FolderOpen24" FontSize="40" HorizontalAlignment="Left" />
+                        <TextBlock Text="Where is Black Ops II installed?" FontSize="20" FontWeight="SemiBold" Margin="0,12,0,6" />
+                        <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   Text="Pick the game's &quot;sound&quot; folder (the one with the .sabs and .sabl files). For Plutonium it's usually Documents\Plutonium\Black_Ops_II\…\sound." />
+                        <TextBlock Text="{Binding FolderError}" Foreground="{StaticResource ErrorTextBrush}" TextWrapping="Wrap" Margin="0,10,0,0"
+                                   Visibility="{Binding FolderError, Converter={StaticResource NullToVisibility}}" />
+                        <ui:Button Content="Browse for the sound folder…" Icon="{ui:SymbolIcon Folder24}" Appearance="Primary"
+                                   Margin="0,18,0,0" Command="{Binding ChooseFolderCommand}" />
+                    </StackPanel>
+                </ui:Card>
+            </Border>
+        </Grid>
+
+        <!-- Writing to game files: block input briefly so nothing changes underneath -->
+        <Border Grid.Row="1" Grid.RowSpan="4" Background="#99000000"
+                Visibility="{Binding IsBusy, Converter={StaticResource BoolToVisibility}}">
+            <ui:Card HorizontalAlignment="Center" VerticalAlignment="Center" Padding="24,20" MinWidth="360">
+                <StackPanel Orientation="Horizontal">
+                    <ui:ProgressRing IsIndeterminate="True" Width="32" Height="32" />
+                    <StackPanel Margin="16,0,0,0" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding BusyText}" FontWeight="SemiBold" />
+                        <TextBlock Text="Don't start the game until this finishes." FontSize="12"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+                </StackPanel>
+            </ui:Card>
+        </Border>
+
+        <!-- Quiet notifications instead of pop-up message boxes -->
+        <ui:SnackbarPresenter x:Name="SnackbarPresenter" Grid.Row="2" VerticalAlignment="Bottom" Margin="0,0,0,8" />
+
+        <!-- Apply bar + player bar -->
+        <StackPanel Grid.Row="3">
+        <Border Margin="12,10,12,0" CornerRadius="8" Padding="14,8"
+                Background="{StaticResource PendingBackgroundBrush}" BorderBrush="{StaticResource PendingBrush}" BorderThickness="1"
+                Visibility="{Binding HasPendingChanges, Converter={StaticResource BoolToVisibility}}">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                    <ui:Button Content="Review" Margin="8,0,0,0" Command="{Binding ReviewPendingCommand}" />
+                    <ui:Button Content="Discard all" Margin="8,0,0,0" Command="{Binding DiscardAllCommand}" />
+                    <ui:Button Content="Apply to game" Margin="8,0,0,0" Appearance="Primary" Icon="{ui:SymbolIcon Save24}"
+                               Command="{Binding ApplyPendingCommand}"
+                               ToolTip="Write the staged sounds into the game files (close Black Ops II first)" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <ui:SymbolIcon Symbol="ArrowSync24" Foreground="{StaticResource PendingBrush}" Margin="0,0,10,0" />
+                    <TextBlock Text="{Binding PendingSummary}" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    <StackPanel Orientation="Horizontal" Margin="16,0,0,0"
+                                Visibility="{Binding PendingTooLongCount, Converter={StaticResource NonZeroToVisibility}}">
+                        <ui:SymbolIcon Symbol="Warning24" Foreground="{StaticResource ModifiedBrush}" Margin="0,0,6,0" />
+                        <TextBlock VerticalAlignment="Center">
+                            <Run Text="{Binding PendingTooLongCount, Mode=OneWay}" /> <Run Text="longer than the original" />
+                        </TextBlock>
+                        <ui:Button Content="Trim all" Margin="10,0,0,0" Padding="8,3" Command="{Binding TrimAllTooLongCommand}" />
+                    </StackPanel>
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <!-- Player bar -->
+        <Border Margin="12,10,12,0" CornerRadius="8" Padding="12,8"
+                DataContext="{Binding Player}" d:DataContext="{d:DesignInstance vm:PlayerViewModel}"
+                Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="220" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <!-- Transport -->
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                    <ui:Button Width="44" Height="44" Padding="0" CornerRadius="22" Appearance="Primary"
+                               Command="{Binding PlayPauseCommand}" IsEnabled="{Binding IsLoaded}"
+                               ToolTip="Play / pause (Space)">
+                        <Grid>
+                            <ui:SymbolIcon Symbol="Play24" Filled="True" FontSize="20"
+                                           Visibility="{Binding IsPlaying, Converter={StaticResource InverseBoolToVisibility}}" />
+                            <ui:SymbolIcon Symbol="Pause24" Filled="True" FontSize="20"
+                                           Visibility="{Binding IsPlaying, Converter={StaticResource BoolToVisibility}}" />
+                        </Grid>
+                    </ui:Button>
+                    <ui:Button Margin="6,0,0,0" Width="34" Height="34" Padding="0" Icon="{ui:SymbolIcon Stop24}"
+                               Command="{Binding StopCommand}" IsEnabled="{Binding IsLoaded}" ToolTip="Stop" />
+                </StackPanel>
+
+                <!-- Now playing -->
+                <StackPanel Grid.Column="1" Margin="12,0,8,0" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding Row.Name, FallbackValue='Nothing selected', TargetNullValue='Nothing selected'}"
+                               FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip="{Binding Row.Name}" />
+                    <TextBlock FontSize="12" Foreground="{DynamicResource TextFillColorTertiaryBrush}">
+                        <Run Text="{Binding PositionText, Mode=OneWay}" /><Run Text=" / " /><Run Text="{Binding DurationText, Mode=OneWay}" />
+                    </TextBlock>
+                </StackPanel>
+
+                <!-- A/B -->
+                <Border Grid.Column="2" Margin="4,0,12,0" CornerRadius="6" Padding="2" VerticalAlignment="Center"
+                        Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                        Visibility="{Binding ShowSourceSwitch, Converter={StaticResource BoolToVisibility}}"
+                        ToolTip="Compare versions; the playhead stays where it is">
+                    <StackPanel Orientation="Horizontal">
+                        <RadioButton GroupName="AB" Content="New" Style="{StaticResource SegmentButton}"
+                                     IsChecked="{Binding IsNewSource}"
+                                     Visibility="{Binding HasNewSource, Converter={StaticResource BoolToVisibility}}"
+                                     ToolTip="The staged replacement (not in the game yet)" />
+                        <RadioButton GroupName="AB" Content="In game" Style="{StaticResource SegmentButton}"
+                                     IsChecked="{Binding IsCurrentSource}" ToolTip="What the game plays right now" />
+                        <RadioButton GroupName="AB" Content="Original" Style="{StaticResource SegmentButton}"
+                                     IsChecked="{Binding IsOriginalSource}"
+                                     Visibility="{Binding HasOriginalSource, Converter={StaticResource BoolToVisibility}}"
+                                     ToolTip="The untouched game audio" />
+                    </StackPanel>
+                </Border>
+
+                <!-- Waveform -->
+                <Grid Grid.Column="3" Height="48" VerticalAlignment="Center">
+                    <controls:WaveformControl Peaks="{Binding Peaks}" Progress="{Binding Progress}"
+                                              SeekCommand="{Binding SeekCommand}"
+                                              PlayedBrush="{DynamicResource AccentFillColorDefaultBrush}"
+                                              UnplayedBrush="{DynamicResource TextFillColorDisabledBrush}"
+                                              Visibility="{Binding IsLoaded, Converter={StaticResource BoolToVisibility}}" />
+                    <ui:ProgressRing IsIndeterminate="True" Width="22" Height="22"
+                                     Visibility="{Binding IsLoading, Converter={StaticResource BoolToVisibility}}" />
+                    <TextBlock Text="{Binding ErrorText}" Foreground="{StaticResource ErrorTextBrush}" VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis"
+                               Visibility="{Binding ErrorText, Converter={StaticResource NullToVisibility}}" />
+                </Grid>
+
+                <!-- Options -->
+                <StackPanel Grid.Column="4" Orientation="Horizontal" Margin="12,0,0,0" VerticalAlignment="Center">
+                    <ToggleButton Padding="8,6" IsChecked="{Binding Loop}" ToolTip="Loop playback">
+                        <ui:SymbolIcon Symbol="ArrowRepeatAll24" />
+                    </ToggleButton>
+                    <ToggleButton Padding="8,6" Margin="6,0,0,0" IsChecked="{Binding AutoPlay}"
+                                  ToolTip="Auto-play: play each sound as soon as you select it">
+                        <StackPanel Orientation="Horizontal">
+                            <ui:SymbolIcon Symbol="PlayCircle24" />
+                            <TextBlock Text="Auto" Margin="4,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </ToggleButton>
+                    <ui:SymbolIcon Symbol="Speaker224" Margin="12,0,6,0" />
+                    <Slider Width="100" Minimum="0" Maximum="1" VerticalAlignment="Center"
+                            Value="{Binding Volume}" ToolTip="Volume" />
+                </StackPanel>
+
+                <ui:Button Grid.Column="5" Margin="12,0,0,0" Icon="{ui:SymbolIcon ArrowDownload24}" Content="WAV"
+                           Command="{Binding ExportWavCommand}" IsEnabled="{Binding IsLoaded}"
+                           ToolTip="Export what you're hearing as a WAV file" />
+            </Grid>
+        </Border>
+
+        </StackPanel>
+
+        <!-- Status bar -->
+        <Grid Grid.Row="4" Margin="16,8,16,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="0" Text="{Binding ScanStatus}" Foreground="{DynamicResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
+            <ProgressBar Grid.Column="1" Width="160" Margin="12,0,0,0" Value="{Binding ScanProgress}" Maximum="100" VerticalAlignment="Center"
+                         Visibility="{Binding IsScanning, Converter={StaticResource BoolToVisibility}}" />
+            <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+                <ui:Button Margin="0,0,14,0" Padding="10,3" Appearance="Primary" Icon="{ui:SymbolIcon ArrowSync24}"
+                           Command="{Binding RestartToUpdateCommand}"
+                           Visibility="{Binding UpdateReadyVersion, Converter={StaticResource NullToVisibility}}">
+                    <TextBlock>
+                        <Run Text="Restart to update to" /> <Run Text="{Binding UpdateReadyVersion, Mode=OneWay}" />
+                    </TextBlock>
+                </ui:Button>
+                <TextBlock Text="{Binding SummaryText}" Foreground="{DynamicResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
+                <TextBlock Text="{Binding VersionText}" Margin="12,0,0,0" Foreground="{DynamicResource TextFillColorTertiaryBrush}" VerticalAlignment="Center" />
+            </StackPanel>
+        </Grid>
+    </Grid>
+</ui:FluentWindow>

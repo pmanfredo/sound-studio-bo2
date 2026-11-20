@@ -1,0 +1,214 @@
+<ui:FluentWindow x:Class="SoundStudio.App.RecorderWindow"
+                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                 xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+                 xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+                 xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                 xmlns:vm="clr-namespace:SoundStudio.App.ViewModels"
+                 xmlns:controls="clr-namespace:SoundStudio.App.Controls"
+                 mc:Ignorable="d"
+                 d:DataContext="{d:DesignInstance vm:RecorderViewModel}"
+                 Title="Record"
+                 Width="760" Height="600" MinWidth="620" MinHeight="540"
+                 WindowStartupLocation="CenterOwner"
+                 ExtendsContentIntoTitleBar="True"
+                 WindowBackdropType="Mica"
+                 ShowInTaskbar="False">
+
+    <Grid x:Name="RootGrid">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <ui:TitleBar Grid.Row="0" Title="Record a new version" ShowMaximize="False" ShowMinimize="False">
+            <ui:TitleBar.Icon>
+                <ui:SymbolIcon Symbol="Mic24" />
+            </ui:TitleBar.Icon>
+        </ui:TitleBar>
+
+        <!-- What we're recording for -->
+        <DockPanel Grid.Row="1" Margin="22,4,22,14">
+            <ui:Button DockPanel.Dock="Right" Icon="{ui:SymbolIcon Play24}" Content="Hear original" VerticalAlignment="Center"
+                       Command="{Binding HearOriginalCommand}" ToolTip="Listen to what the game plays now" />
+            <StackPanel>
+                <TextBlock Text="{Binding Target.Name}" FontSize="20" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                <TextBlock Foreground="{DynamicResource TextFillColorSecondaryBrush}">
+                    <Run Text="{Binding Target.CategoryAndMap, Mode=OneWay}" /><Run Text=" · original length " /><Run Text="{Binding TargetDurationText, Mode=OneWay}" FontWeight="SemiBold" />
+                </TextBlock>
+            </StackPanel>
+        </DockPanel>
+
+        <!-- Microphone, input meter and mic level -->
+        <StackPanel Grid.Row="2" Margin="22,0,22,14">
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="280" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <ui:SymbolIcon Grid.Column="0" Symbol="Mic24" Margin="0,0,8,0" VerticalAlignment="Center" />
+            <ComboBox Grid.Column="1" ItemsSource="{Binding Devices}" SelectedItem="{Binding SelectedDevice}"
+                      IsEnabled="{Binding IsRecording, Converter={StaticResource InverseBool}}" ToolTip="Microphone" />
+            <Grid Grid.Column="2" Margin="14,0,0,0" VerticalAlignment="Center" ToolTip="Input level: aim for the green part, avoid red">
+                <Border Height="10" CornerRadius="5" Background="{DynamicResource ControlFillColorSecondaryBrush}" />
+                <!-- Green up to -18 dB, amber to -9 dB, red near clipping; masked to the current level. -->
+                <Border Height="10" CornerRadius="5">
+                    <Border.Background>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                            <GradientStop Color="#3FB950" Offset="0" />
+                            <GradientStop Color="#3FB950" Offset="0.7" />
+                            <GradientStop Color="#F5A524" Offset="0.85" />
+                            <GradientStop Color="#FF5555" Offset="1" />
+                        </LinearGradientBrush>
+                    </Border.Background>
+                    <Border.OpacityMask>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                            <GradientStop Color="Black" Offset="{Binding Level}" />
+                            <GradientStop Color="Transparent" Offset="{Binding Level}" />
+                        </LinearGradientBrush>
+                    </Border.OpacityMask>
+                </Border>
+            </Grid>
+        </Grid>
+
+        <!-- Mic level (the Windows input level for this microphone) -->
+        <DockPanel Margin="0,10,0,0"
+                   Visibility="{Binding HasMicLevel, Converter={StaticResource BoolToVisibility}}">
+            <TextBlock DockPanel.Dock="Left" Text="Mic level" Width="80" VerticalAlignment="Center"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+            <TextBlock DockPanel.Dock="Right" Width="44" TextAlignment="Right" VerticalAlignment="Center">
+                <Run Text="{Binding MicLevel, Mode=OneWay, StringFormat=0}" /><Run Text="%" />
+            </TextBlock>
+            <Slider Minimum="0" Maximum="100" Value="{Binding MicLevel}" VerticalAlignment="Center"
+                    ToolTip="Your microphone's input level (same as in Windows sound settings). Lower it if the meter hits red." />
+        </DockPanel>
+        </StackPanel>
+
+        <!-- Main area -->
+        <Border Grid.Row="3" Margin="22,0" CornerRadius="8" Padding="18"
+                Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+            <Grid>
+                <!-- Ready / countdown / recording -->
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                            Visibility="{Binding IsRecorded, Converter={StaticResource InverseBoolToVisibility}}">
+                    <Grid HorizontalAlignment="Center">
+                        <ui:Button Width="96" Height="96" CornerRadius="48" Padding="0" Appearance="Danger"
+                                   Command="{Binding RecordCommand}" ToolTip="Start recording (R)"
+                                   Visibility="{Binding IsReady, Converter={StaticResource BoolToVisibility}}">
+                            <ui:SymbolIcon Symbol="Record24" Filled="True" FontSize="44" />
+                        </ui:Button>
+                        <ui:Button Width="96" Height="96" CornerRadius="48" Padding="0"
+                                   Command="{Binding StopCommand}" ToolTip="Stop (Space)"
+                                   Visibility="{Binding IsRecording, Converter={StaticResource BoolToVisibility}}">
+                            <ui:SymbolIcon Symbol="Stop24" Filled="True" FontSize="40" />
+                        </ui:Button>
+                        <Border Width="96" Height="96" CornerRadius="48" Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                                Visibility="{Binding IsCountdown, Converter={StaticResource BoolToVisibility}}">
+                            <TextBlock Text="{Binding CountdownText}" FontSize="44" FontWeight="SemiBold"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                    </Grid>
+                    <TextBlock HorizontalAlignment="Center" Margin="0,14,0,0" FontSize="16"
+                               Visibility="{Binding IsReady, Converter={StaticResource BoolToVisibility}}"
+                               Text="Press record, say your line, then stop." />
+                    <TextBlock HorizontalAlignment="Center" Margin="0,14,0,0" FontSize="16"
+                               Visibility="{Binding IsCountdown, Converter={StaticResource BoolToVisibility}}"
+                               Text="Get ready…" />
+                    <StackPanel HorizontalAlignment="Center" Margin="0,14,0,0" Orientation="Horizontal"
+                                Visibility="{Binding IsRecording, Converter={StaticResource BoolToVisibility}}">
+                        <Ellipse Width="10" Height="10" Fill="#FF5555" Margin="0,0,8,0" VerticalAlignment="Center" />
+                        <TextBlock Text="Recording" FontSize="16" />
+                        <TextBlock Text="{Binding ElapsedText}" FontSize="16" Margin="10,0,0,0" FontFamily="Consolas" />
+                    </StackPanel>
+                    <CheckBox HorizontalAlignment="Center" Margin="0,16,0,0" Content="Count down 3-2-1 first"
+                              IsChecked="{Binding UseCountdown}"
+                              Visibility="{Binding IsReady, Converter={StaticResource BoolToVisibility}}" />
+                    <TextBlock HorizontalAlignment="Center" Margin="0,10,0,0" Foreground="{StaticResource ModifiedBrush}"
+                               Text="Too loud: the input is clipping. Move back from the mic or turn its level down."
+                               Visibility="{Binding IsClipping, Converter={StaticResource BoolToVisibility}}" />
+                </StackPanel>
+
+                <!-- Recorded: trim and check -->
+                <Grid Visibility="{Binding IsRecorded, Converter={StaticResource BoolToVisibility}}">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Margin="0,0,0,8" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                               Text="Drag the white handles to keep just your line. Silence around it was trimmed automatically." TextWrapping="Wrap" />
+                    <controls:TrimWaveformControl Grid.Row="1" MinHeight="120"
+                                                  Peaks="{Binding Peaks}" Progress="{Binding PreviewProgress}"
+                                                  SelectionStart="{Binding TrimStart}" SelectionEnd="{Binding TrimEnd}"
+                                                  WaveBrush="{DynamicResource AccentFillColorDefaultBrush}"
+                                                  HandleBrush="{DynamicResource TextFillColorPrimaryBrush}" />
+                    <WrapPanel Grid.Row="2" Margin="0,12,0,0">
+                        <ui:Button Margin="0,0,8,6" Command="{Binding PlayPreviewCommand}" Appearance="Primary" ToolTip="Hear the result (Space)">
+                            <StackPanel Orientation="Horizontal">
+                                <ui:SymbolIcon Symbol="Play24" Margin="0,0,6,0" Visibility="{Binding IsPreviewing, Converter={StaticResource InverseBoolToVisibility}}" />
+                                <ui:SymbolIcon Symbol="Stop24" Margin="0,0,6,0" Visibility="{Binding IsPreviewing, Converter={StaticResource BoolToVisibility}}" />
+                                <TextBlock Text="Play result" />
+                            </StackPanel>
+                        </ui:Button>
+                        <ui:Button Margin="0,0,8,6" Content="Auto-trim silence" Icon="{ui:SymbolIcon Cut24}" Command="{Binding AutoTrimCommand}" />
+                        <ui:Button Margin="0,0,8,6" Content="Keep all" Icon="{ui:SymbolIcon ArrowMaximize24}" Command="{Binding ResetTrimCommand}" />
+                        <CheckBox Margin="4,0,0,6" Content="Normalize volume" IsChecked="{Binding Normalize}" VerticalAlignment="Center"
+                                  ToolTip="Make the recording as loud as the game's own audio" />
+                        <StackPanel Orientation="Horizontal" Margin="12,0,0,6" VerticalAlignment="Center"
+                                    ToolTip="Fine-tune the loudness of the result (applied after normalizing; won't distort)">
+                            <TextBlock Text="Volume" VerticalAlignment="Center" Margin="0,0,8,0" />
+                            <Slider Width="130" Minimum="-12" Maximum="12" SmallChange="0.5" Value="{Binding TakeGainDb}" VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding TakeGainText}" Width="56" Margin="8,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </WrapPanel>
+                    <StackPanel Grid.Row="3" Margin="0,8,0,0">
+                        <TextBlock>
+                            <Run Text="Length" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            <Run Text="{Binding ResultDurationText, Mode=OneWay}" FontWeight="SemiBold" />
+                            <Run Text="  ·  original" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                            <Run Text="{Binding TargetDurationText, Mode=OneWay}" FontWeight="SemiBold" />
+                        </TextBlock>
+                        <DockPanel Margin="0,8,0,0" Visibility="{Binding IsTooLong, Converter={StaticResource BoolToVisibility}}">
+                            <ui:Button DockPanel.Dock="Right" Content="Fit to original" Icon="{ui:SymbolIcon Cut24}" Margin="8,0,0,0"
+                                       Command="{Binding FitToOriginalCommand}" />
+                            <ui:SymbolIcon DockPanel.Dock="Left" Symbol="Warning24" Foreground="{StaticResource ModifiedBrush}" Margin="0,0,8,0" VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding LengthWarning}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                        </DockPanel>
+                    </StackPanel>
+                </Grid>
+
+                <!-- Errors (no mic, privacy settings...) -->
+                <Border VerticalAlignment="Bottom" CornerRadius="6" Padding="12,8" Background="#33FF5555"
+                        Visibility="{Binding ErrorText, Converter={StaticResource NullToVisibility}}">
+                    <TextBlock Text="{Binding ErrorText}" TextWrapping="Wrap" />
+                </Border>
+            </Grid>
+        </Border>
+
+        <!-- Footer -->
+        <Grid Grid.Row="4" Margin="22,14,22,18">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <ui:Button Grid.Column="0" Content="Record again" Icon="{ui:SymbolIcon ArrowCounterclockwise24}"
+                       Command="{Binding RecordAgainCommand}"
+                       Visibility="{Binding IsRecorded, Converter={StaticResource BoolToVisibility}}" />
+            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                <ui:Button Content="Save WAV…" Margin="0,0,8,0" Icon="{ui:SymbolIcon ArrowDownload24}" Command="{Binding SaveWavCommand}"
+                           Visibility="{Binding IsRecorded, Converter={StaticResource BoolToVisibility}}" />
+                <ui:Button Content="Close" Margin="0,0,8,0" Click="Close_Click" />
+                <ui:Button Content="Use as replacement" Appearance="Primary" Icon="{ui:SymbolIcon Checkmark24}"
+                           Command="{Binding UseAsReplacementCommand}" IsEnabled="{Binding IsRecorded}"
+                           ToolTip="Stage this recording; nothing is written to the game until you click Apply" />
+            </StackPanel>
+        </Grid>
+    </Grid>
+</ui:FluentWindow>

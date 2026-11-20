@@ -56,11 +56,12 @@ public sealed class AudioPlayer : IDisposable
         _output.PlaybackStopped += OnPlaybackStopped;
     }
 
+    /// <summary>Plays from the current position; after the end it starts over from the beginning.</summary>
     public void Play()
     {
         if (_output == null || _stream == null)
             return;
-        if (_stream.Position >= _stream.Length)
+        if (_output.PlaybackState == PlaybackState.Stopped && _stream.Position >= _stream.Length - _stream.WaveFormat.BlockAlign)
             _stream.Position = 0;
         _output.Play();
     }
@@ -71,8 +72,13 @@ public sealed class AudioPlayer : IDisposable
     {
         if (_output == null)
             return;
-        _stopRequested = true;
-        _output.Stop();
+        // Only expect a "stopped" callback if something is actually playing; otherwise a stale flag would
+        // swallow the next natural end and the UI would think the sound is still playing.
+        if (_output.PlaybackState != PlaybackState.Stopped)
+        {
+            _stopRequested = true;
+            _output.Stop();
+        }
         Position = TimeSpan.Zero;
     }
 

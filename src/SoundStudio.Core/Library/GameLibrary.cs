@@ -34,6 +34,10 @@ public sealed class SoundInfo
     }
 
     public string IdHex => Id.ToString("X8");
+
+    /// <summary>What kind of sound this is, from its asset path (Voices · zmb_tomb, Weapons · lmg, ...).</summary>
+    public SoundType Type => _type ??= SoundTypes.Describe(AssetPath);
+    private SoundType? _type;
     public TimeSpan Duration => SampleRate == 0 ? TimeSpan.Zero : TimeSpan.FromSeconds((double)SampleCount / SampleRate);
     public string FormatName => Format.DisplayName();
     public bool CanReplace => Format.CanReplace();
