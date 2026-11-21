@@ -25,6 +25,9 @@ public interface IUserDialogs
     /// <summary>Opens (or focuses) the Share window.</summary>
     void ShowSync(ViewModels.SyncViewModel sync);
 
+    /// <summary>Opens the layer editor (modal). It stages the mix itself via the view model's callback.</summary>
+    void ShowLayers(ViewModels.LayersViewModel layers, ViewModels.LayerSession? session);
+
     /// <summary>Shows matched files for bulk replace. Null = cancelled.</summary>
     Task<ViewModels.ReviewResult?> ReviewReplacementsAsync(IReadOnlyList<ViewModels.MatchItemViewModel> items, string scopeName);
 }
@@ -39,6 +42,7 @@ public sealed class SilentDialogs : IUserDialogs
     public string? PickFile(string title, string filter) => null;
     public void ShowRecorder(ViewModels.RecorderViewModel recorder) { }
     public void ShowSync(ViewModels.SyncViewModel sync) { }
+    public void ShowLayers(ViewModels.LayersViewModel layers, ViewModels.LayerSession? session) { }
     public Task<ViewModels.ReviewResult?> ReviewReplacementsAsync(IReadOnlyList<ViewModels.MatchItemViewModel> items, string scopeName) =>
         Task.FromResult<ViewModels.ReviewResult?>(null);
 }
@@ -62,6 +66,8 @@ public sealed class ScriptedDialogs(string? folder, string logPath) : IUserDialo
     public void ShowRecorder(ViewModels.RecorderViewModel recorder) =>
         File.AppendAllText(logPath, $"RECORDER for {recorder.Target.Name}{Environment.NewLine}");
     public void ShowSync(ViewModels.SyncViewModel sync) { }
+    public void ShowLayers(ViewModels.LayersViewModel layers, ViewModels.LayerSession? session) =>
+        File.AppendAllText(logPath, $"LAYERS for {layers.Target.Name}{Environment.NewLine}");
 
     /// <summary>"--pick" may name a file directly.</summary>
     public string? PickFile(string title, string filter) => folder != null && File.Exists(folder) ? folder : null;

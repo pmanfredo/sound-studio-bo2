@@ -86,14 +86,29 @@ public sealed partial class MainViewModel : ObservableObject
 
     public bool HasNoResults => Library != null && VisibleRows.Count == 0;
 
+    /// <summary>Offers in the current list that haven't been requested yet (for "Get N shown").</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasOffersShown))]
+    private int _offersShownCount;
+    public bool HasOffersShown => OffersShownCount > 0;
+
     /// <summary>Empty-list message: different when nothing is searched (e.g. no modified sounds left).</summary>
-    public string EmptyTitle => IsSearching ? "No sounds match"
-        : SelectedNode?.Kind == LibraryNodeKind.Pending ? "No staged changes" : "Nothing modified here";
+    public string EmptyTitle => IsSearching ? "No sounds match" : SelectedNode?.Kind switch
+    {
+        LibraryNodeKind.Pending => "No staged changes",
+        LibraryNodeKind.Available => "Nothing new from others",
+        _ => "Nothing modified here",
+    };
     public string EmptyHint => IsSearching
         ? "Try fewer words, or part of a name like \"death\" or \"vox\"."
-        : SelectedNode?.Kind == LibraryNodeKind.Pending
-            ? "Drag an audio file onto any sound, or use Replace from folder."
-            : "Every sound in this list is the original game audio.";
+        : SelectedNode?.Kind switch
+        {
+            LibraryNodeKind.Pending => "Drag an audio file onto any sound, or use Replace from folder.",
+            LibraryNodeKind.Available => Sync.IsActive
+                ? "When someone you sync with changes a sound you don't have, it shows up here."
+                : "Use Share at the top to host or join; sounds others have changed show up here.",
+            _ => "Every sound in this list is the original game audio.",
+        };
     private bool IsSearching => GameLibrary.ParseQuery(SearchText).Length > 0;
     [ObservableProperty] private string _resultText = "";
 
@@ -230,6 +245,7 @@ public sealed partial class MainViewModel : ObservableObject
                 SelectedRow = VisibleRows.FirstOrDefault(r => r.BankFileName == selectedKey.BankFileName && r.Info.Index == selectedKey.Index);
             }
 
+            OnLibraryStateChanged();
             var failed = library.Banks.Count(b => b.Error != null);
             ScanStatus = failed > 0 ? $"{failed} bank(s) could not be read" : "Ready";
         }
@@ -281,6 +297,12 @@ public sealed partial class MainViewModel : ObservableObject
             ToolTip = "Replacements you've staged but not yet applied to the game",
         };
         Tree.Add(_pendingNode);
+        _offerRows.Clear();
+        _offerNode = new LibraryNodeViewModel(LibraryNodeKind.Available, "Available from others", SymbolRegular.CloudArrowDown24, _offerRows)
+        {
+            ToolTip = "Sounds that people you sync with have changed and you don't have yet",
+        };
+        Tree.Add(_offerNode);
 
         foreach (var category in library.Banks.GroupBy(b => b.Description.Category).OrderBy(g => g.Key))
         {
@@ -442,6 +464,7 @@ public sealed partial class MainViewModel : ObservableObject
 
         var previous = SelectedRow;
         VisibleRows = result;
+        OffersShownCount = result.Count(r => r.Offer is { Requested: false });
         OnPropertyChanged(nameof(EmptyTitle));
         OnPropertyChanged(nameof(EmptyHint));
         SelectedRow = previous != null && result.Contains(previous) ? previous : null;
@@ -451,7 +474,7 @@ public sealed partial class MainViewModel : ObservableObject
         if (SelectedNode == _pendingNode && result.Count == 0)
             ResultText = "Pending changes · none";
         ResultText = result.Count == source.Count
-            ? $"{scope} · {result.Count:N0} sounds"
+            ? $"{scope} · {result.Count:N0} {(result.Count == 1 ? "sound" : "sounds")}"
             : $"{scope} · {result.Count:N0} of {source.Count:N0} sounds";
     }
 
@@ -520,7 +543,6 @@ public sealed partial class MainViewModel : ObservableObject
                 {
                     var result = await Task.Run(() => _editor.Revert(bank.Key, bank.Select(r => r.Info.Index)));
                     reverted += result.Reverted;
-                    PublishReverted(bank.Key, bank.Where(r => !result.MissingOriginals.Contains(r.Info.Index)));
                 }
                 catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException or InvalidDataException)
                 {

@@ -11,10 +11,10 @@ public sealed class PendingChange(SoundRowViewModel row, PreparedReplacement pre
 
     public SoundRowViewModel Row { get; } = row;
 
-    /// <summary>Set when a friend shared this change (it won't be shared back).</summary>
+    /// <summary>Set when this change came from someone you sync with.</summary>
     public string? FromAuthor { get; init; }
 
-    /// <summary>A friend reverted this sound to the original.</summary>
+    /// <summary>Someone you sync with reverted this sound to the original.</summary>
     public bool IsRevert { get; init; }
 
     /// <summary>Only the volume of the current game audio changed (no new file).</summary>
@@ -23,7 +23,7 @@ public sealed class PendingChange(SoundRowViewModel row, PreparedReplacement pre
     public double GainDb => Prepared.AppliedGainDb;
     private string GainText => Math.Abs(GainDb) < 0.05 ? "" : $" · {GainDb:+0.0;-0.0} dB";
 
-    /// <summary>What goes in the history and to friends, e.g. "voice.wav, +3.0 dB" or "Volume -4.5 dB".</summary>
+    /// <summary>What goes in the history, e.g. "voice.wav, +3.0 dB" or "Volume -4.5 dB".</summary>
     public string Detail => IsVolumeOnly
         ? $"Volume {GainDb:+0.0;-0.0} dB"
         : FromAuthor != null ? $"from {FromAuthor}" : SourceFileName + (Math.Abs(GainDb) < 0.05 ? "" : $", {GainDb:+0.0;-0.0} dB");

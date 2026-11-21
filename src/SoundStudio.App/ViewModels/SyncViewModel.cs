@@ -15,8 +15,9 @@ public enum SyncMode { Off, Host, Join }
 public sealed record RouteItem(string Label, SymbolRegular Icon, string Url);
 
 /// <summary>
-/// Sharing with friends: Host mode (built-in server + LAN beacon + Tailscale + optional Cloudflare quick
-/// tunnel) or Join mode (client). Incoming changes are handed to <see cref="IncomingHandler"/>.
+/// Sharing sounds with other installs: Host mode (built-in server reachable over LAN, Tailscale, a Cloudflare
+/// quick tunnel or the user's own address) or Join mode. Sync compares what each install has and moves audio
+/// only when someone asks for it; the main view model supplies this install's state and handles what arrives.
 /// </summary>
 public sealed partial class SyncViewModel : ObservableObject, IAsyncDisposable
 {
@@ -31,7 +32,7 @@ public sealed partial class SyncViewModel : ObservableObject, IAsyncDisposable
         _settings = settings;
         _displayName = settings.DisplayName;
         _shareOverInternet = settings.ShareOverInternet;
-        _autoApplyIncoming = settings.AutoApplyIncoming;
+        _autoGet = settings.AutoGetFromOthers;
         _publicAddress = settings.PublicAddress ?? "";
     }
 
@@ -40,14 +41,41 @@ public sealed partial class SyncViewModel : ObservableObject, IAsyncDisposable
     /// <summary>SOUNDSTUDIO_SYNC_LOOPBACK=1: host on 127.0.0.1 only (testing; no firewall prompt).</summary>
     private static bool LoopbackOnly => Environment.GetEnvironmentVariable("SOUNDSTUDIO_SYNC_LOOPBACK") == "1";
 
-    /// <summary>Set by the main view model: shares every modified sound.</summary>
-    public Func<Task<int>>? ShareAllHandler { get; set; }
+    // ---- what the main view model plugs in (see SyncClient) ----
 
-    [RelayCommand]
-    private Task ShareAllAsync() => ShareAllHandler?.Invoke() ?? Task.FromResult(0);
+    /// <summary>This install's modified sounds (called on a background thread).</summary>
+    public Func<List<ManifestEntry>>? ManifestProvider { get; set; }
 
-    /// <summary>Set by the main view model: stages (or applies) received changes.</summary>
-    public Func<IReadOnlyList<IncomingChange>, Task>? IncomingHandler { get; set; }
+    /// <summary>Audio for a sound someone asked for, if this install still has that version (background thread).</summary>
+    public Func<AudioRequest, byte[]?>? AudioProvider { get; set; }
+
+    /// <summary>Everyone else's manifests changed (called on the UI thread).</summary>
+    public Func<IReadOnlyList<Manifest>, Task>? ManifestsHandler { get; set; }
+
+    /// <summary>Requested audio arrived (called on the UI thread).</summary>
+    public Func<WantedAudio, byte[], Task>? AudioHandler { get; set; }
+
+    /// <summary>The install's sounds changed: re-publish what it has.</summary>
+    public void ManifestChanged() => _client?.ManifestChanged();
+
+    /// <summary>Asks other installs for these sounds; they arrive when their owner is online.</summary>
+    public void Request(IEnumerable<(string OwnerId, string OwnerName, ManifestEntry Entry)> sounds)
+    {
+        _client?.Request(sounds);
+        UpdateStatus();
+    }
+
+    public void CancelRequest(SoundKey key)
+    {
+        _client?.CancelRequest(key);
+        UpdateStatus();
+    }
+
+    public IReadOnlyList<WantedAudio> Wanted => _client?.Wanted ?? [];
+
+    /// <summary>Whether another install is connected right now (when the host knows).</summary>
+    public bool? IsOnline(string clientId) =>
+        Peers.FirstOrDefault(p => p.ClientId == clientId) is { } peer ? peer.Online : null;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsOff), nameof(IsHost), nameof(IsJoined))]
@@ -67,7 +95,8 @@ public sealed partial class SyncViewModel : ObservableObject, IAsyncDisposable
     [ObservableProperty] private string? _errorText;
     [ObservableProperty] private bool _shareOverInternet;
     [ObservableProperty] private string? _tunnelStatus;
-    [ObservableProperty] private bool _autoApplyIncoming;
+    /// <summary>Fetch everything others changed automatically (it still waits under Pending changes).</summary>
+    [ObservableProperty] private bool _autoGet;
 
     /// <summary>Optional stable address (named Cloudflare tunnel, reverse proxy...). Empty = not used.</summary>
     [ObservableProperty] private string _publicAddress;
@@ -112,7 +141,7 @@ public sealed partial class SyncViewModel : ObservableObject, IAsyncDisposable
             var hello = System.Text.Json.JsonSerializer.Deserialize<HostHello>(json, SyncProtocol.Json);
             PublicAddressOk = hello?.HostId == _settings.HostId;
             PublicAddressStatus = PublicAddressOk
-                ? "Works: friends can reach you at this address."
+                ? "Works: others can reach you at this address."
                 : "Something answered, but it isn't this PC's Sound Studio. Check where the address forwards to.";
         }
         catch (Exception ex) when (ex is System.Net.Http.HttpRequestException or TaskCanceledException or System.Text.Json.JsonException)
@@ -127,7 +156,7 @@ public sealed partial class SyncViewModel : ObservableObject, IAsyncDisposable
     /// <summary>Short text for the toolbar chip.</summary>
     public string ChipText => Mode switch
     {
-        SyncMode.Host => Peers.Count switch { 0 => "Hosting", 1 => "Hosting · 1 friend", var n => $"Hosting · {n} friends" },
+        SyncMode.Host => Peers.Count(p => p.Online) switch { 0 => "Hosting", var n => $"Hosting · {n} connected" },
         SyncMode.Join => IsConnected ? $"Synced with {_settings.JoinHostName}" : "Sync offline",
         _ => "Share",
     };
@@ -138,10 +167,15 @@ public sealed partial class SyncViewModel : ObservableObject, IAsyncDisposable
         SaveSettings();
     }
 
-    partial void OnAutoApplyIncomingChanged(bool value)
+    /// <summary>Raised when auto-get is switched on, so waiting differences can be fetched right away.</summary>
+    public event EventHandler? AutoGetEnabled;
+
+    partial void OnAutoGetChanged(bool value)
     {
-        _settings.AutoApplyIncoming = value;
+        _settings.AutoGetFromOthers = value;
         SaveSettings();
+        if (value)
+            AutoGetEnabled?.Invoke(this, EventArgs.Empty);
     }
 
     partial void OnShareOverInternetChanged(bool value)
@@ -239,7 +273,7 @@ public sealed partial class SyncViewModel : ObservableObject, IAsyncDisposable
     private async Task StopAsync()
     {
         if (IsHost && Peers.Count > 0 && !await Dialogs.ConfirmAsync("Stop hosting?",
-                "Your friends won't receive changes until you host again. Their invite code will still work when you do.", "Stop hosting"))
+                "Others can't sync until you host again. Their invite code will still work when you do.", "Stop hosting"))
             return;
         await StopAllAsync();
         _settings.SyncRole = "Off";
@@ -265,7 +299,7 @@ public sealed partial class SyncViewModel : ObservableObject, IAsyncDisposable
         if (InviteCode == null)
             return;
         Clipboard.SetText(InviteCode);
-        Dialogs.Notify("Invite code copied", "Send it to your friend; they paste it under Join.");
+        Dialogs.Notify("Invite code copied", "Send it to the person you want to share with; they paste it under Join.");
     }
 
     [RelayCommand]
@@ -275,10 +309,17 @@ public sealed partial class SyncViewModel : ObservableObject, IAsyncDisposable
     {
         _client = new SyncClient(connection, _settings.ClientId, _settings.DisplayName, AppPaths.SyncFolder)
         {
-            OnChanges = changes =>
+            ManifestProvider = () => ManifestProvider?.Invoke() ?? [],
+            AudioProvider = r => AudioProvider?.Invoke(r),
+            OnManifests = manifests =>
             {
-                var handler = IncomingHandler;
-                return handler == null ? Task.CompletedTask : Application.Current.Dispatcher.InvokeAsync(() => handler(changes)).Task.Unwrap();
+                var handler = ManifestsHandler;
+                return handler == null ? Task.CompletedTask : Application.Current.Dispatcher.InvokeAsync(() => handler(manifests)).Task.Unwrap();
+            },
+            OnAudio = (wanted, data) =>
+            {
+                var handler = AudioHandler;
+                return handler == null ? Task.CompletedTask : Application.Current.Dispatcher.InvokeAsync(() => handler(wanted, data)).Task.Unwrap();
             },
         };
         _client.StatusChanged += (_, _) => Application.Current?.Dispatcher.BeginInvoke(UpdateStatus);
@@ -288,6 +329,7 @@ public sealed partial class SyncViewModel : ObservableObject, IAsyncDisposable
             {
                 _settings.JoinUrls = [.. _client!.Connection.Urls];
                 SaveSettings();
+                SetPeers(details.Peers);
             }
         });
         _client.Start();
@@ -367,7 +409,7 @@ public sealed partial class SyncViewModel : ObservableObject, IAsyncDisposable
         try
         {
             var url = await _tunnel.StartAsync(exe, _server.Port);
-            TunnelStatus = "Internet address is ready. It changes each time you host, so send the new code if a friend isn't on your network or Tailscale.";
+            TunnelStatus = "Internet address is ready. It changes each time you host, so send the new code to anyone not on your network or Tailscale.";
             _ = url;
         }
         catch (Exception ex) when (ex is InvalidOperationException or TimeoutException or System.ComponentModel.Win32Exception)
@@ -392,10 +434,15 @@ public sealed partial class SyncViewModel : ObservableObject, IAsyncDisposable
 
     private void RefreshPeers()
     {
-        Peers.Clear();
         if (_server != null)
-            foreach (var p in _server.Peers.Where(p => p.ClientId != _settings.ClientId).OrderBy(p => p.Name))
-                Peers.Add(p);
+            SetPeers(_server.Peers);
+    }
+
+    private void SetPeers(IEnumerable<PeerInfo> peers)
+    {
+        Peers.Clear();
+        foreach (var p in peers.Where(p => p.ClientId != _settings.ClientId).OrderByDescending(p => p.Online).ThenBy(p => p.Name))
+            Peers.Add(p);
         OnPropertyChanged(nameof(ChipText));
         UpdateStatus();
     }
@@ -406,12 +453,13 @@ public sealed partial class SyncViewModel : ObservableObject, IAsyncDisposable
     {
         var c = _client;
         IsConnected = c?.Status == SyncStatus.Connected;
-        var waiting = c?.OutboxCount ?? 0;
-        var waitingText = waiting > 0 ? $" · {waiting} change{(waiting == 1 ? "" : "s")} waiting to send" : "";
+        var waiting = c?.Wanted.Count ?? 0;
+        var waitingText = waiting > 0 ? $" · waiting for {waiting} requested sound{(waiting == 1 ? "" : "s")}" : "";
+        var online = Peers.Count(p => p.Online);
         (StatusText, DetailText) = Mode switch
         {
-            SyncMode.Host => (Peers.Count == 0 ? "Hosting · waiting for friends to join" : $"Hosting · {Peers.Count} connected",
-                $"Changes you apply are shared automatically{waitingText}."),
+            SyncMode.Host => (Peers.Count == 0 ? "Hosting · waiting for others to join" : $"Hosting · {online} of {Peers.Count} connected",
+                $"Others can see which sounds you've changed and ask for them{waitingText}."),
             SyncMode.Join => c?.Status switch
             {
                 SyncStatus.Connected => ($"Connected to {_settings.JoinHostName} via {RouteName(c.ActiveUrl)}",
@@ -420,7 +468,7 @@ public sealed partial class SyncViewModel : ObservableObject, IAsyncDisposable
                     (c.LastError ?? "") + waitingText),
                 _ => ($"Connecting to {_settings.JoinHostName}…", waitingText),
             },
-            _ => ("Sync off", "Host to share your changes, or join a friend with their invite code."),
+            _ => ("Sync off", "Host to share your sounds, or join someone else with their invite code."),
         };
         OnPropertyChanged(nameof(ChipText));
     }
@@ -432,23 +480,10 @@ public sealed partial class SyncViewModel : ObservableObject, IAsyncDisposable
         _ => "the internet",
     };
 
-    // ---- outgoing ------------------------------------------------------------------------------------------
+    public bool IsActive => _client != null;
 
-    public bool CanPublish => _client != null;
-
-    /// <summary>Last connection error and queue size, for diagnostics.</summary>
-    public string Diagnostics => $"status={_client?.Status} url={_client?.ActiveUrl} error={_client?.LastError} outbox={_client?.OutboxCount} seq={_client?.LastSeq}";
-
-    public void Publish(IEnumerable<(SyncChange Change, byte[]? Data)> changes)
-    {
-        if (_client == null)
-            return;
-        var list = changes.ToList();
-        if (list.Count == 0)
-            return;
-        _client.Publish(list);
-        UpdateStatus();
-    }
+    /// <summary>Connection state and queue, for diagnostics.</summary>
+    public string Diagnostics => $"status={_client?.Status} url={_client?.ActiveUrl} error={_client?.LastError} wanted={_client?.Wanted.Count}";
 
     /// <summary>Runs a background task, turning failures into a visible message instead of a crash.</summary>
     private async void Forget(Task task)

@@ -45,6 +45,11 @@ public partial class MainWindow : FluentWindow, IUserDialogs
             ViewModel.RecordSelectedCommand.Execute(null);
             e.Handled = true;
         }
+        else if (e.Key == Key.L && Keyboard.Modifiers == ModifierKeys.Control)
+        {
+            ViewModel.LayerSelectedCommand.Execute(null);
+            e.Handled = true;
+        }
         else if (e.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control)
         {
             ViewModel.ReplaceSelectedCommand.Execute(null);
@@ -144,6 +149,9 @@ public partial class MainWindow : FluentWindow, IUserDialogs
 
     public void ShowRecorder(RecorderViewModel recorder) =>
         new RecorderWindow(recorder) { Owner = this }.ShowDialog();
+
+    public void ShowLayers(LayersViewModel layers, LayerSession? session) =>
+        new LayersWindow(layers, session) { Owner = this }.ShowDialog();
 
     public string? PickFile(string title, string filter)
     {

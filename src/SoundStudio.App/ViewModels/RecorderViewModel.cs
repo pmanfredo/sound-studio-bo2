@@ -53,6 +53,10 @@ public sealed partial class RecorderViewModel : ObservableObject, IDisposable
     public event EventHandler? RequestClose;
 
     public IUserDialogs Dialogs { get; set; } = new SilentDialogs();
+
+    /// <summary>Text of the main button ("Use as replacement", or "Add as layer" from the layer editor).</summary>
+    public string UseLabel { get; init; } = "Use as replacement";
+    public string UseToolTip { get; init; } = "Stage this recording; nothing is written to the game until you click Apply";
     public SoundRowViewModel Target { get; }
     public string TargetDurationText => SoundRowViewModel.FormatDuration(Target.Info.Duration);
 

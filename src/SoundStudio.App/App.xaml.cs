@@ -154,12 +154,33 @@ public partial class App : Application
                         for (var i = 0; i < 600 && !File.Exists(Arg("--wait-file")!); i++) await Task.Delay(200);
                         break;
                     case "touch": File.WriteAllText(Arg("--touch")!, "done"); break;
-                    case "share-first-modified":
-                        vm.Sync.Publish(vm.VisibleRows.Where(r => r.IsModified).Take(1).Select(r =>
-                        {
-                            var (c, d) = SoundStudio.Sync.SyncChanges.Current(r.Info.Bank.FilePath, r.Info.Index, r.Info.Id, "test");
-                            return (c, (byte[]?)d);
-                        }));
+                    case "get-all": vm.GetAllShownCommand.Execute(null); break;
+                    case "layers" when vm.SelectedRow is { } lr:
+                    {
+                        // Opens the layer editor, adds --layer-file files (2nd one quieter and delayed), screenshots, stages.
+                        var lvm = vm.CreateLayers(lr);
+                        var lw = new LayersWindow(lvm, null) { Owner = window };
+                        lw.Show();
+                        for (var i = 0; i < 50 && lvm.Layers.Count == 0; i++) await Task.Delay(100);
+                        if (Arg("--layer-file") is { } lf)
+                            await lvm.AddFilesAsync(lf.Split('|'));
+                        if (lvm.Layers.Count > 1) { lvm.Layers[1].GainDb = -6; lvm.Layers[1].OffsetSeconds = 0.3; }
+                        if (lvm.Layers.Count > 2) lvm.Layers[2].OffsetSeconds = 0.62;
+                        if (lvm.Layers.Count > 3) lvm.Layers[3].Muted = true;
+                        lvm.MasterGainDb = 3;
+                        await Task.Delay(1200);
+                        if (args.Contains("--zoom-original")) lvm.ZoomToOriginalCommand.Execute(null);
+                        lvm.PlayFrom(0.9);
+                        await Task.Delay(300);
+                        await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                        SaveVisual(lw.RootGrid, Path.ChangeExtension(path, ".layers.png"));
+                        File.AppendAllText(Path.ChangeExtension(path, ".log"),
+                            $"LAYERS count={lvm.Layers.Count} mix={lvm.MixDurationText} note='{lvm.MixNote}' warn='{lvm.LengthWarning}' err='{lvm.ErrorText}'{Environment.NewLine}");
+                        await lvm.UseAsReplacementCommand.ExecuteAsync(null);
+                        break;
+                    }
+                    case "select-available":
+                        if (vm.Tree.FirstOrDefault(n => n.Kind == ViewModels.LibraryNodeKind.Available) is { } an) vm.SelectedNode = an;
                         break;
                 }
                 await Task.Delay(800);

@@ -8,10 +8,11 @@ namespace SoundStudio.Sync;
 
 public static class SyncProtocol
 {
-    public const int Version = 1;
+    /// <summary>2 = state sync (manifests + audio on request). 1 was the change log of Sound Studio 1.0.x.</summary>
+    public const int Version = 2;
     public const int DefaultPort = 5150;
-    public const int BeaconPort = 5151;
     public const long MaxBlobBytes = 256L * 1024 * 1024;
+    public const int MaxManifestSounds = 50_000;
 
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     {
@@ -32,30 +33,58 @@ public static class SyncProtocol
         return Convert.FromBase64String(s.PadRight(s.Length + (4 - s.Length % 4) % 4, '='));
     }
 
+    public static bool IsHex(string? s, int length) => s is not null && s.Length == length && s.All(Uri.IsHexDigit);
+
     /// <summary>
-    /// Checks a change from someone else before anything uses it. Bank names must be plain file names
-    /// (no folders, so "..\\x" can't point outside the sound folder); text fields are bounded.
-    /// Returns null when valid.
+    /// A bank name from someone else must be a plain bank file name (no folders, so "..\\x" can't point outside
+    /// the sound folder).
     /// </summary>
-    public static string? Validate(SyncChange c)
+    public static bool IsSafeBankName(string? bank) =>
+        !string.IsNullOrWhiteSpace(bank) && bank.Length <= 128 && bank == Path.GetFileName(bank) &&
+        bank.IndexOfAny(Path.GetInvalidFileNameChars()) < 0 &&
+        (bank.EndsWith(".sabs", StringComparison.OrdinalIgnoreCase) || bank.EndsWith(".sabl", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Checks one entry of someone else's manifest before anything uses it. Null when valid.</summary>
+    public static string? Validate(ManifestEntry e)
     {
-        if (string.IsNullOrWhiteSpace(c.Bank) || c.Bank.Length > 128 || c.Bank != Path.GetFileName(c.Bank) ||
-            c.Bank.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ||
-            !(c.Bank.EndsWith(".sabs", StringComparison.OrdinalIgnoreCase) || c.Bank.EndsWith(".sabl", StringComparison.OrdinalIgnoreCase)))
+        if (!IsSafeBankName(e.Bank))
             return "Invalid bank name.";
-        if (c.Index < 0 || c.SampleCount < 0 || c.Channels is < 0 or > 8 || c.SampleRate < 0 || c.BlobSize is < 0 or > MaxBlobBytes)
+        if (e.Index < 0 || e.SampleCount < 0 || e.Channels is < 0 or > 8 || e.SampleRate < 0 || e.Size is < 0 or > MaxBlobBytes)
             return "Invalid sound details.";
-        if (c.OriginalChecksum is not { Length: 32 } || !c.OriginalChecksum.All(Uri.IsHexDigit))
+        if (!IsHex(e.OriginalChecksum, 32))
             return "Invalid checksum.";
-        if (c.Action == SyncAction.Replace && (c.BlobSha256 is not { Length: 64 } || !c.BlobSha256.All(Uri.IsHexDigit)))
-            return "Invalid audio reference.";
-        if (c.Author.Length > 64 || c.ClientId.Length > 64 || (c.SourceName?.Length ?? 0) > 260 || (c.SoundName?.Length ?? 0) > 512)
+        if (!IsHex(e.Hash, 64))
+            return "Invalid audio fingerprint.";
+        if ((e.Source?.Length ?? 0) > 260 || (e.SoundName?.Length ?? 0) > 512)
             return "Text too long.";
         return null;
     }
 
+    public static string? Validate(Manifest m)
+    {
+        if (string.IsNullOrEmpty(m.ClientId) || m.ClientId.Length > 64)
+            return "Invalid client.";
+        if (m.Sounds.Count > MaxManifestSounds)
+            return "Too many sounds.";
+        foreach (var e in m.Sounds)
+        {
+            if (Validate(e) is { } problem)
+                return problem;
+        }
+        return null;
+    }
+
+    public static string? Validate(AudioRequest r)
+    {
+        if (string.IsNullOrEmpty(r.OwnerId) || r.OwnerId.Length > 64 || string.IsNullOrEmpty(r.RequesterId) || r.RequesterId.Length > 64)
+            return "Invalid request.";
+        if (!IsSafeBankName(r.Bank) || r.Index < 0 || !IsHex(r.Hash, 64))
+            return "Invalid request.";
+        return null;
+    }
+
     /// <summary>A name from someone else, safe to show and to use in a file name.</summary>
-    public static string CleanName(string? name, string fallback = "Friend")
+    public static string CleanName(string? name, string fallback = "Someone")
     {
         var cleaned = new string((name ?? "").Where(ch => !char.IsControl(ch) && !Path.GetInvalidFileNameChars().Contains(ch)).ToArray())
             .Trim().TrimEnd('.').Trim();
@@ -70,59 +99,75 @@ public static class SyncProtocol
         CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(a), Encoding.UTF8.GetBytes(b));
 }
 
-public enum SyncAction
+/// <summary>Identifies one sound in the game: bank file, table position and id.</summary>
+public readonly record struct SoundKey(string Bank, int Index, uint Id)
 {
-    /// <summary>The sound now has the audio in the blob.</summary>
-    Replace,
-
-    /// <summary>The sound went back to the original game audio.</summary>
-    Revert,
+    public override string ToString() => $"{Bank}#{Index}:{Id:X8}";
 }
 
-/// <summary>
-/// One change to one sound, as shared between Sound Studio installs. The audio itself travels separately
-/// as a content-addressed blob, already encoded for the game (so receivers write it as-is).
-/// </summary>
-public sealed record SyncChange
+/// <summary>One modified sound as it is in someone's game right now.</summary>
+public sealed record ManifestEntry
 {
-    /// <summary>Server order; 0 until the server accepts it.</summary>
-    public long Seq { get; init; }
-    public Guid ChangeId { get; init; } = Guid.NewGuid();
-    public required string ClientId { get; init; }
-    public required string Author { get; init; }
-    public DateTime TimeUtc { get; init; } = DateTime.UtcNow;
-    public required SyncAction Action { get; init; }
-
     public required string Bank { get; init; }
     public required int Index { get; init; }
     public required uint Id { get; init; }
 
-    /// <summary>MD5 from the bank's checksum table: proves both sides start from the same game sound.</summary>
+    /// <summary>MD5 from the bank's checksum table: both sides must start from the same game sound.</summary>
     public required string OriginalChecksum { get; init; }
 
+    /// <summary>SHA-256 of the sound's current, game-encoded audio. Equal hashes = identical sounds.</summary>
+    public required string Hash { get; init; }
+
+    public long Size { get; init; }
     public AudioFormat Format { get; init; }
     public int Channels { get; init; }
     public int SampleRate { get; init; }
     public int SampleCount { get; init; }
 
-    public string? BlobSha256 { get; init; }
-    public long BlobSize { get; init; }
-
-    /// <summary>File the author used (e.g. "my_voice.wav"), for display.</summary>
-    public string? SourceName { get; init; }
+    /// <summary>Where it came from, for display ("my_voice.wav", "Volume -3.0 dB").</summary>
+    public string? Source { get; init; }
     public string? SoundName { get; init; }
+
+    [JsonIgnore] public SoundKey Key => new(Bank, Index, Id);
+}
+
+/// <summary>
+/// What one install has changed: every modified sound and its fingerprint. Small (no audio), published to the
+/// host whenever it changes. Sounds not listed are the original game audio.
+/// </summary>
+public sealed record Manifest
+{
+    public required string ClientId { get; init; }
+    public required string Name { get; init; }
+    public DateTime UpdatedUtc { get; init; } = DateTime.UtcNow;
+    public List<ManifestEntry> Sounds { get; init; } = [];
+}
+
+/// <summary>"Please upload this sound's audio": asked of the install that has it.</summary>
+public sealed record AudioRequest
+{
+    public required string RequesterId { get; init; }
+    public string? RequesterName { get; init; }
+    public required string OwnerId { get; init; }
+    public required string Bank { get; init; }
+    public required int Index { get; init; }
+    public required uint Id { get; init; }
+    public required string Hash { get; init; }
+    public DateTime CreatedUtc { get; init; } = DateTime.UtcNow;
+
+    [JsonIgnore] public SoundKey Key => new(Bank, Index, Id);
 }
 
 /// <summary>Unauthenticated hello: enough to recognise the right host, nothing secret.</summary>
 public sealed record HostHello(string HostId, string HostName, int Protocol);
 
-/// <summary>Authenticated host details: current addresses (they change, e.g. a new tunnel URL).</summary>
-public sealed record HostDetails(string HostId, string HostName, IReadOnlyList<string> Urls, IReadOnlyList<PeerInfo> Peers, long LatestSeq);
+/// <summary>Authenticated host details: current addresses (they change, e.g. a new tunnel URL) and who's around.</summary>
+public sealed record HostDetails(string HostId, string HostName, IReadOnlyList<string> Urls, IReadOnlyList<PeerInfo> Peers);
 
-public sealed record PeerInfo(string ClientId, string Name, DateTime LastSeenUtc);
+public sealed record PeerInfo(string ClientId, string Name, DateTime LastSeenUtc, bool Online);
 
 /// <summary>
-/// Everything a friend needs to connect, as one copy-pasteable string:
+/// Everything needed to connect, as one copy-pasteable string:
 /// <c>SS1.</c> + base64url(JSON { host id, host name, token, candidate URLs }).
 /// </summary>
 public sealed record InviteCode(string HostId, string HostName, string Token, IReadOnlyList<string> Urls)

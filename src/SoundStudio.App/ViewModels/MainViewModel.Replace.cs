@@ -64,6 +64,27 @@ public sealed partial class MainViewModel
     public RecorderViewModel CreateRecorder(SoundRowViewModel row, bool demo = false) =>
         new(row, _settings, path => StageAsync([(row, path)], options: null), demo) { Dialogs = Dialogs };
 
+    /// <summary>The last layer mix staged per sound, so "Layer sounds…" reopens with the same layers.</summary>
+    private readonly Dictionary<SoundRowViewModel, LayerSession> _layerSessions = [];
+
+    /// <summary>Opens the layer editor for the selected sound; "Use as replacement" stages the mix.</summary>
+    [RelayCommand]
+    private void LayerSelected()
+    {
+        if (SelectedRow is not { CanReplace: true } row)
+            return;
+        Player.StopCommand.Execute(null);
+        var session = _layerSessions.TryGetValue(row, out var s) && row.Pending?.Prepared.SourcePath == s.MixPath ? s : null;
+        Dialogs.ShowLayers(CreateLayers(row), session);
+    }
+
+    public LayersViewModel CreateLayers(SoundRowViewModel row) =>
+        new(row, _settings, _editor.Originals, async (path, session) =>
+        {
+            _layerSessions[row] = session;
+            await StageAsync([(row, path)], options: null);
+        }) { Dialogs = Dialogs };
+
     [RelayCommand]
     private async Task ReplaceFromFolderAsync()
     {
@@ -308,7 +329,7 @@ public sealed partial class MainViewModel
 
         var applied = 0;
         var errors = new List<string>();
-        // Snapshot now: a friend's change arriving mid-save must not swap what we're writing.
+        // Snapshot now: an incoming change arriving mid-save must not swap what we're writing.
         var snapshot = rows.Select(r => (Row: r, Change: r.Pending!)).ToList();
         var banks = snapshot.GroupBy(s => s.Row.Info.Bank.FilePath).ToList();
         await RunBusyAsync("Saving…", async () =>
@@ -323,7 +344,6 @@ public sealed partial class MainViewModel
                 try
                 {
                     await Task.Run(() => _editor.Apply(bank.Key, changes));
-                    PublishApplied(bank.Key, bank.Select(s => (s.Row.Info.Index, s.Row.Info.Id, s.Change)).ToList());
                     foreach (var s in bank)
                     {
                         if (ReferenceEquals(s.Row.Pending, s.Change)) // keep anything newer that arrived meanwhile

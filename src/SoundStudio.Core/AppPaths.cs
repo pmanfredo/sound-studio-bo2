@@ -86,8 +86,11 @@ public sealed class AppSettings
     /// <summary>Overrides the update location built into the app (normally left empty).</summary>
     public string? UpdateSource { get; set; }
 
-    /// <summary>Write incoming sounds straight to the game instead of staging them for review.</summary>
-    public bool AutoApplyIncoming { get; set; }
+    /// <summary>Fetch whatever others changed automatically (it still waits under Pending changes).</summary>
+    public bool AutoGetFromOthers { get; set; }
+
+    /// <summary>Offers the user chose to ignore: "bank|index|id|fingerprint". A newer version is offered again.</summary>
+    public List<string> IgnoredOffers { get; set; } = [];
 
     public static AppSettings Load()
     {

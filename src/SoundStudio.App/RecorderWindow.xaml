@@ -205,9 +205,9 @@
                 <ui:Button Content="Save WAV…" Margin="0,0,8,0" Icon="{ui:SymbolIcon ArrowDownload24}" Command="{Binding SaveWavCommand}"
                            Visibility="{Binding IsRecorded, Converter={StaticResource BoolToVisibility}}" />
                 <ui:Button Content="Close" Margin="0,0,8,0" Click="Close_Click" />
-                <ui:Button Content="Use as replacement" Appearance="Primary" Icon="{ui:SymbolIcon Checkmark24}"
+                <ui:Button Content="{Binding UseLabel}" Appearance="Primary" Icon="{ui:SymbolIcon Checkmark24}"
                            Command="{Binding UseAsReplacementCommand}" IsEnabled="{Binding IsRecorded}"
-                           ToolTip="Stage this recording; nothing is written to the game until you click Apply" />
+                           ToolTip="{Binding UseToolTip}" />
             </StackPanel>
         </Grid>
     </Grid>

@@ -184,6 +184,23 @@ public static class ReplacementEncoder
         return new DecodedAudio(pcm, audio.SampleRate, audio.Channels);
     }
 
+    /// <summary>Fades the last <paramref name="length"/> out to silence (in place on a copy).</summary>
+    public static DecodedAudio FadeOutEnd(DecodedAudio audio, TimeSpan length)
+    {
+        var pcm = (byte[])audio.Pcm16.Clone();
+        var frames = audio.FrameCount;
+        var fadeFrames = Math.Min(frames, (int)(length.TotalSeconds * audio.SampleRate));
+        var samples = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, short>(pcm.AsSpan());
+        for (var f = 0; f < fadeFrames; f++)
+        {
+            var gain = (float)f / fadeFrames;
+            var frame = frames - 1 - f;
+            for (var c = 0; c < audio.Channels; c++)
+                samples[frame * audio.Channels + c] = (short)(samples[frame * audio.Channels + c] * gain);
+        }
+        return new DecodedAudio(pcm, audio.SampleRate, audio.Channels);
+    }
+
     private static DecodedAudio TrimSilenceStart(DecodedAudio audio)
     {
         var samples = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, short>(audio.Pcm16.AsSpan());

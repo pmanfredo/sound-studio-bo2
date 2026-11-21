@@ -5,7 +5,7 @@ using Wpf.Ui.Controls;
 
 namespace SoundStudio.App.ViewModels;
 
-public enum LibraryNodeKind { AllSounds, Modified, Pending, Category, Map, Bank, TypeRoot, TypeGroup, TypeSubgroup }
+public enum LibraryNodeKind { AllSounds, Modified, Pending, Available, Category, Map, Bank, TypeRoot, TypeGroup, TypeSubgroup }
 
 /// <summary>A node in the library tree (All sounds, Modified, Zombies → Origins → bank file...).</summary>
 public sealed partial class LibraryNodeViewModel : ObservableObject
@@ -38,6 +38,9 @@ public sealed partial class LibraryNodeViewModel : ObservableObject
 
     /// <summary>Highlights the "Modified" smart node.</summary>
     public bool IsAccent => Kind == LibraryNodeKind.Modified;
+
+    /// <summary>Highlights the "Available from others" smart node.</summary>
+    public bool IsAvailableNode => Kind == LibraryNodeKind.Available;
 
     /// <summary>Highlights the "Pending changes" smart node.</summary>
     public bool IsPendingNode => Kind == LibraryNodeKind.Pending;

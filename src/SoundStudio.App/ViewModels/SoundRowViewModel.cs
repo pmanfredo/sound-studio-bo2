@@ -32,14 +32,22 @@ public sealed partial class SoundRowViewModel : ObservableObject
 
     /// <summary>New audio staged for this sound, not yet written to the game.</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(HasPending), nameof(ShowModifiedPill), nameof(CanRevert))]
+    [NotifyPropertyChangedFor(nameof(HasPending), nameof(ShowModifiedPill), nameof(CanRevert), nameof(ShowOfferPill))]
     private PendingChange? _pending;
+
+    /// <summary>Someone else has a different version of this sound that can be fetched.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasOffer), nameof(ShowOfferPill), nameof(ShowModifiedPill))]
+    private OfferViewModel? _offer;
+
+    public bool HasOffer => Offer != null;
+    public bool ShowOfferPill => HasOffer && !HasPending;
 
     public bool HasPending => Pending != null;
     public bool CanReplace => Info.CanReplace && Info.Format != Core.Bo2.AudioFormat.Mp3;
 
     /// <summary>The grid shows "Pending" instead of "Modified" while a change is staged.</summary>
-    public bool ShowModifiedPill => IsModified && !HasPending;
+    public bool ShowModifiedPill => IsModified && !HasPending && !HasOffer;
 
     public bool IsModified => Status == SoundStatus.Modified;
     public bool CanRevert => IsModified && HasOriginal && !HasPending;

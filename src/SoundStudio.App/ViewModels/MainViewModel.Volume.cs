@@ -10,7 +10,7 @@ namespace SoundStudio.App.ViewModels;
 
 /// <summary>
 /// Volume for any sound. Adjusting stages a change like any replacement (so it's applied with Apply, shared
-/// with friends, and revertible): either the staged replacement gets louder/quieter, or, for a sound with
+/// with others, and revertible): either the staged replacement gets louder/quieter, or, for a sound with
 /// nothing staged, the current game audio is re-encoded at the new volume.
 /// </summary>
 public sealed partial class MainViewModel

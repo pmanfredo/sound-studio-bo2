@@ -25,21 +25,28 @@ public sealed record SyncServerOptions
 }
 
 /// <summary>
-/// Host mode: a small HTTP + WebSocket server inside the app. Keeps an append-only change log and the audio
-/// blobs; every request except the hello needs the invite token. Reachable over LAN, Tailscale, or a
-/// Cloudflare tunnel pointed at it.
+/// Host mode: a small HTTP + WebSocket server inside the app. It holds each install's manifest (what it has
+/// changed, no audio) and relays audio only when someone asks for a sound: the request waits here until the
+/// install that has the sound uploads it. Every request except the hello needs the invite token.
 /// </summary>
+/// <remarks>
+/// Live messages on <c>/api/live</c>: <c>manifest:&lt;clientId&gt;</c> (someone's state changed),
+/// <c>request:&lt;ownerId&gt;</c> (someone wants audio from that install), <c>blob:&lt;sha256&gt;</c> (audio arrived).
+/// </remarks>
 public sealed class SyncServer : IAsyncDisposable
 {
     private readonly SyncServerOptions _options;
     private readonly ServerStore _store;
     private readonly ConcurrentDictionary<Guid, LiveSocket> _sockets = new();
+    private readonly ConcurrentDictionary<string, PeerInfo> _peers = new();
+    private WebApplication? _app;
 
     /// <summary>A WebSocket plus a lock: WebSockets allow only one send at a time.</summary>
-    private sealed class LiveSocket(WebSocket socket)
+    private sealed class LiveSocket(WebSocket socket, string clientId)
     {
         private readonly SemaphoreSlim _send = new(1, 1);
         public WebSocket Socket { get; } = socket;
+        public string ClientId { get; } = clientId;
 
         public async Task SendAsync(string text)
         {
@@ -48,8 +55,6 @@ public sealed class SyncServer : IAsyncDisposable
             finally { _send.Release(); }
         }
     }
-    private readonly ConcurrentDictionary<string, PeerInfo> _peers = new();
-    private WebApplication? _app;
 
     public SyncServer(SyncServerOptions options)
     {
@@ -61,8 +66,21 @@ public sealed class SyncServer : IAsyncDisposable
     public Func<IReadOnlyList<string>> ExtraUrls { get; set; } = () => [];
 
     public int Port { get; private set; }
-    public IReadOnlyCollection<PeerInfo> Peers => _peers.Values.ToList();
+
+    /// <summary>Everyone who has connected, with whether they're connected right now.</summary>
+    public IReadOnlyCollection<PeerInfo> Peers
+    {
+        get
+        {
+            var online = _sockets.Values.Select(s => s.ClientId).ToHashSet();
+            return _peers.Values.Select(p => p with { Online = online.Contains(p.ClientId) }).ToList();
+        }
+    }
+
     public event EventHandler? PeersChanged;
+
+    /// <summary>For tests and diagnostics: how many audio files the host is holding.</summary>
+    public int BlobCount => _store.BlobCount;
 
     public async Task StartAsync(CancellationToken ct = default)
     {
@@ -107,24 +125,57 @@ public sealed class SyncServer : IAsyncDisposable
         });
 
         api.MapGet("/details", () => Results.Json(new HostDetails(_options.HostId, _options.HostName,
-            ExtraUrls(), Peers.ToList(), _store.LatestSeq), SyncProtocol.Json));
+            ExtraUrls(), Peers.ToList()), SyncProtocol.Json));
 
-        api.MapGet("/changes", (long? since) =>
-            Results.Json(_store.ChangesSince(since ?? 0), SyncProtocol.Json));
+        // ---- manifests: what each install has changed (no audio) ----
 
-        api.MapPost("/changes", async (HttpRequest request) =>
+        api.MapPut("/manifest", async (HttpRequest request) =>
         {
-            var change = await JsonSerializer.DeserializeAsync<SyncChange>(request.Body, SyncProtocol.Json);
-            if (change == null)
-                return Results.BadRequest("Invalid change.");
-            if (SyncProtocol.Validate(change) is { } problem)
+            var manifest = await JsonSerializer.DeserializeAsync<Manifest>(request.Body, SyncProtocol.Json);
+            if (manifest == null)
+                return Results.BadRequest("Invalid manifest.");
+            if (manifest.ClientId != ClientIdOf(request.HttpContext))
+                return Results.BadRequest("A manifest can only be published by its own install.");
+            if (SyncProtocol.Validate(manifest) is { } problem)
                 return Results.BadRequest(problem);
-            if (change.Action == SyncAction.Replace && (change.BlobSha256 == null || !_store.HasBlob(change.BlobSha256)))
-                return Results.BadRequest("Upload the audio before the change.");
-            var stored = _store.Append(change);
-            await NotifyAsync(stored.Seq);
-            return Results.Json(stored, SyncProtocol.Json);
+            var stored = manifest with { Name = SyncProtocol.CleanName(manifest.Name), UpdatedUtc = DateTime.UtcNow };
+            _store.SaveManifest(stored);
+            await NotifyAsync($"manifest:{stored.ClientId}");
+            return Results.Ok();
         });
+
+        api.MapGet("/manifests", () => Results.Json(_store.Manifests(), SyncProtocol.Json));
+
+        // ---- requests: "please upload this sound" ----
+
+        api.MapPost("/requests", async (HttpRequest request) =>
+        {
+            var items = await JsonSerializer.DeserializeAsync<List<AudioRequest>>(request.Body, SyncProtocol.Json);
+            if (items == null || items.Count > SyncProtocol.MaxManifestSounds)
+                return Results.BadRequest("Invalid request.");
+            var requester = ClientIdOf(request.HttpContext);
+            var ready = new List<string>();
+            var owners = new HashSet<string>();
+            foreach (var item in items)
+            {
+                if (SyncProtocol.Validate(item) is { } problem || item.RequesterId != requester)
+                    return Results.BadRequest("Invalid request.");
+                if (_store.HasBlob(item.Hash))
+                    ready.Add(item.Hash); // already here (someone asked before): no need to bother the owner
+                else if (_store.AddRequest(item))
+                    owners.Add(item.OwnerId);
+            }
+            foreach (var owner in owners)
+                await NotifyAsync($"request:{owner}");
+            foreach (var sha in ready.Distinct())
+                await NotifyAsync($"blob:{sha.ToLowerInvariant()}");
+            return Results.Ok();
+        });
+
+        api.MapGet("/requests", (HttpRequest request) =>
+            Results.Json(_store.RequestsFor(ClientIdOf(request.HttpContext)), SyncProtocol.Json));
+
+        // ---- audio ----
 
         api.MapMethods("/blobs/{sha}", ["HEAD"], (string sha) =>
             _store.HasBlob(sha) ? Results.Ok() : Results.NotFound());
@@ -136,22 +187,30 @@ public sealed class SyncServer : IAsyncDisposable
         {
             if (!ServerStore.IsSha(sha))
                 return Results.BadRequest("Bad hash.");
+            if (!_store.IsRequested(sha))
+                return Results.BadRequest("Nobody asked for this sound."); // audio only travels on request
             var ok = await _store.PutBlobAsync(sha, request.Body);
-            return ok ? Results.Ok() : Results.BadRequest("Content doesn't match its hash.");
+            if (!ok)
+                return Results.BadRequest("Content doesn't match its fingerprint.");
+            _store.CompleteRequests(sha);
+            await NotifyAsync($"blob:{sha.ToLowerInvariant()}");
+            return Results.Ok();
         });
 
-        // Live updates: the server sends "seq:N" whenever a change is added.
+        // ---- live updates ----
+
         api.Map("/live", async (HttpContext http) =>
         {
             if (!http.WebSockets.IsWebSocketRequest)
                 return Results.BadRequest();
             using var socket = await http.WebSockets.AcceptWebSocketAsync();
             var id = Guid.NewGuid();
-            var live = new LiveSocket(socket);
+            var live = new LiveSocket(socket, ClientIdOf(http));
             _sockets[id] = live;
+            PeersChanged?.Invoke(this, EventArgs.Empty);
             try
             {
-                await live.SendAsync($"seq:{_store.LatestSeq}");
+                await live.SendAsync("hello");
                 var buffer = new byte[256];
                 while (socket.State == WebSocketState.Open)
                 {
@@ -165,30 +224,35 @@ public sealed class SyncServer : IAsyncDisposable
             finally
             {
                 _sockets.TryRemove(id, out _);
+                PeersChanged?.Invoke(this, EventArgs.Empty);
             }
             return Results.Empty;
         });
     }
 
+    private static string ClientIdOf(HttpContext http)
+    {
+        var id = http.Request.Headers["X-Client-Id"].ToString();
+        return id.Length is > 0 and <= 64 ? id : "";
+    }
+
     private void TouchPeer(HttpContext http)
     {
-        var clientId = http.Request.Headers["X-Client-Id"].ToString();
-        if (string.IsNullOrEmpty(clientId))
+        var clientId = ClientIdOf(http);
+        if (clientId.Length == 0)
             return;
         var name = Uri.UnescapeDataString(http.Request.Headers["X-Client-Name"].ToString());
         var isNew = !_peers.ContainsKey(clientId);
-        if (clientId.Length > 64)
-            return;
-        _peers[clientId] = new PeerInfo(clientId, SyncProtocol.CleanName(name, "Someone"), DateTime.UtcNow);
+        _peers[clientId] = new PeerInfo(clientId, SyncProtocol.CleanName(name), DateTime.UtcNow, Online: false);
         if (isNew)
             PeersChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    private async Task NotifyAsync(long seq)
+    private async Task NotifyAsync(string message)
     {
         foreach (var (id, live) in _sockets)
         {
-            try { await live.SendAsync($"seq:{seq}"); }
+            try { await live.SendAsync(message); }
             catch (Exception ex) when (ex is WebSocketException or ObjectDisposedException or IOException or InvalidOperationException)
             {
                 _sockets.TryRemove(id, out _);
@@ -198,7 +262,7 @@ public sealed class SyncServer : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        // Say goodbye politely, but never let a friend's half-dead connection stop the host from shutting down.
+        // Say goodbye politely, but never let a half-dead connection stop the host from shutting down.
         foreach (var socket in _sockets.Values.Select(s => s.Socket))
         {
             if (socket.State != WebSocketState.Open)
@@ -220,62 +284,96 @@ public sealed class SyncServer : IAsyncDisposable
     }
 }
 
-/// <summary>Host-side storage: changes.jsonl (append-only) + blobs/{sha256}.</summary>
+/// <summary>Host-side storage: manifests/{client}.json, requests.json, blobs/{sha256}.</summary>
 internal sealed class ServerStore
 {
+    private static readonly TimeSpan RequestLifetime = TimeSpan.FromDays(30);
     private readonly string _folder;
-    private readonly string _logPath;
-    private readonly List<SyncChange> _changes = [];
-    private readonly HashSet<Guid> _ids = [];
+    private readonly Dictionary<string, Manifest> _manifests = [];
+    private readonly List<AudioRequest> _requests = [];
     private readonly object _lock = new();
 
     public ServerStore(string folder)
     {
         _folder = folder;
         Directory.CreateDirectory(Path.Combine(folder, "blobs"));
-        _logPath = Path.Combine(folder, "changes.jsonl");
-        if (File.Exists(_logPath))
+        Directory.CreateDirectory(Path.Combine(folder, "manifests"));
+        foreach (var file in Directory.EnumerateFiles(Path.Combine(folder, "manifests"), "*.json"))
         {
-            foreach (var line in File.ReadLines(_logPath))
+            try
             {
-                if (string.IsNullOrWhiteSpace(line))
-                    continue;
-                try
-                {
-                    var c = JsonSerializer.Deserialize<SyncChange>(line, SyncProtocol.Json);
-                    if (c != null && _ids.Add(c.ChangeId))
-                        _changes.Add(c);
-                }
-                catch (JsonException) { }
+                if (JsonSerializer.Deserialize<Manifest>(File.ReadAllText(file), SyncProtocol.Json) is { } m)
+                    _manifests[m.ClientId] = m;
             }
+            catch (JsonException) { }
         }
+        try
+        {
+            var path = Path.Combine(folder, "requests.json");
+            if (File.Exists(path) && JsonSerializer.Deserialize<List<AudioRequest>>(File.ReadAllText(path), SyncProtocol.Json) is { } saved)
+                _requests.AddRange(saved.Where(r => DateTime.UtcNow - r.CreatedUtc < RequestLifetime));
+        }
+        catch (JsonException) { }
     }
 
-    public long LatestSeq { get { lock (_lock) return _changes.Count == 0 ? 0 : _changes[^1].Seq; } }
-
-    public List<SyncChange> ChangesSince(long seq)
+    public List<Manifest> Manifests()
     {
         lock (_lock)
-            return _changes.Where(c => c.Seq > seq).ToList();
+            return [.. _manifests.Values];
     }
 
-    /// <summary>Adds a change (idempotent by ChangeId) and returns it with its sequence number.</summary>
-    public SyncChange Append(SyncChange change)
+    public void SaveManifest(Manifest manifest)
     {
         lock (_lock)
         {
-            if (!_ids.Add(change.ChangeId))
-                return _changes.First(c => c.ChangeId == change.ChangeId);
-            var stored = change with { Seq = (_changes.Count == 0 ? 0 : _changes[^1].Seq) + 1 };
-            _changes.Add(stored);
-            File.AppendAllText(_logPath, JsonSerializer.Serialize(stored, SyncProtocol.Json) + Environment.NewLine);
-            return stored;
+            _manifests[manifest.ClientId] = manifest;
+            WriteAtomically(Path.Combine(_folder, "manifests", Sanitize(manifest.ClientId) + ".json"),
+                JsonSerializer.Serialize(manifest, SyncProtocol.Json));
         }
     }
 
-    public static bool IsSha(string sha) => sha.Length == 64 && sha.All(Uri.IsHexDigit);
+    /// <summary>Adds a request unless the same one is already waiting. Returns true if it's new.</summary>
+    public bool AddRequest(AudioRequest request)
+    {
+        lock (_lock)
+        {
+            if (_requests.Any(r => r.OwnerId == request.OwnerId && r.RequesterId == request.RequesterId &&
+                                   r.Hash.Equals(request.Hash, StringComparison.OrdinalIgnoreCase)))
+                return false;
+            _requests.Add(request with { Hash = request.Hash.ToLowerInvariant(), CreatedUtc = DateTime.UtcNow });
+            SaveRequests();
+            return true;
+        }
+    }
+
+    public List<AudioRequest> RequestsFor(string ownerId)
+    {
+        lock (_lock)
+            return _requests.Where(r => r.OwnerId == ownerId && !HasBlob(r.Hash)).ToList();
+    }
+
+    public bool IsRequested(string sha)
+    {
+        lock (_lock)
+            return _requests.Any(r => r.Hash.Equals(sha, StringComparison.OrdinalIgnoreCase));
+    }
+
+    public void CompleteRequests(string sha)
+    {
+        lock (_lock)
+        {
+            if (_requests.RemoveAll(r => r.Hash.Equals(sha, StringComparison.OrdinalIgnoreCase)) > 0)
+                SaveRequests();
+        }
+    }
+
+    private void SaveRequests() =>
+        WriteAtomically(Path.Combine(_folder, "requests.json"), JsonSerializer.Serialize(_requests, SyncProtocol.Json));
+
+    public static bool IsSha(string sha) => SyncProtocol.IsHex(sha, 64);
     public string BlobPath(string sha) => Path.Combine(_folder, "blobs", sha.ToLowerInvariant());
     public bool HasBlob(string sha) => IsSha(sha) && File.Exists(BlobPath(sha));
+    public int BlobCount => Directory.EnumerateFiles(Path.Combine(_folder, "blobs")).Count(f => !f.EndsWith(".tmp"));
 
     public async Task<bool> PutBlobAsync(string sha, Stream body)
     {
@@ -303,5 +401,14 @@ internal sealed class ServerStore
             if (File.Exists(temp))
                 File.Delete(temp);
         }
+    }
+
+    private static string Sanitize(string s) => string.Concat(s.Where(char.IsLetterOrDigit));
+
+    private static void WriteAtomically(string path, string text)
+    {
+        var temp = path + ".tmp";
+        File.WriteAllText(temp, text);
+        File.Move(temp, path, overwrite: true);
     }
 }

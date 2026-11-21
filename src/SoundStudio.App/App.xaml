@@ -43,6 +43,19 @@
             <SolidColorBrush x:Key="ModifiedBackgroundBrush" Color="#33F5A524" />
             <SolidColorBrush x:Key="ErrorTextBrush" Color="#FF6B6B" />
 
+            <!-- "Available" accent: someone else has a different version. -->
+            <SolidColorBrush x:Key="AvailableBrush" Color="#3DD6B5" />
+            <SolidColorBrush x:Key="AvailableBackgroundBrush" Color="#333DD6B5" />
+            <Style x:Key="AvailablePill" TargetType="Border">
+                <Setter Property="Background" Value="{StaticResource AvailableBackgroundBrush}" />
+                <Setter Property="BorderBrush" Value="{StaticResource AvailableBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="CornerRadius" Value="9" />
+                <Setter Property="Padding" Value="7,1" />
+                <Setter Property="HorizontalAlignment" Value="Left" />
+                <Setter Property="VerticalAlignment" Value="Center" />
+            </Style>
+
             <!-- "Pending" accent: staged but not yet applied. -->
             <SolidColorBrush x:Key="PendingBrush" Color="#5AB0FF" />
             <SolidColorBrush x:Key="PendingBackgroundBrush" Color="#335AB0FF" />

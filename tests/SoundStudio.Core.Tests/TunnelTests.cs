@@ -62,29 +62,35 @@ public sealed class TunnelTests(ITestOutputHelper output)
             Directory.CreateDirectory(Path.GetDirectoryName(bankA)!);
             File.Copy(bankSource, bankA);
 
-            var received = new List<IncomingChange>();
+            // A lists sound 0 in its manifest; B asks for it; A uploads it on request.
+            uint soundId;
+            using (var bank = SabBank.Open(bankA))
+                soundId = bank.Entries[0].Id;
+            var entry = SyncState.Describe(bankA, 0, soundId, "tunnel test");
+            var received = new List<byte[]>();
+            IReadOnlyList<Manifest> seenByB = [];
             SyncClient Client(string id, string name) => new(new SyncConnection("tunnel-host", "Tunnel host", token, [url]), id, name,
                 Path.Combine(dir.FullName, id)) { RetryDelay = TimeSpan.FromSeconds(1), PollInterval = TimeSpan.FromSeconds(60) };
 
             await using var a = Client("a", "Sender");
+            a.ManifestProvider = () => [entry];
+            a.AudioProvider = r => SyncState.ReadIfCurrent(Path.GetDirectoryName(bankA)!, r);
             await using var b = Client("b", "Receiver");
-            b.OnChanges = c => { lock (received) received.AddRange(c); return Task.CompletedTask; };
+            b.OnManifests = m => { seenByB = m; return Task.CompletedTask; };
+            b.OnAudio = (_, data) => { lock (received) received.Add(data); return Task.CompletedTask; };
             a.Start();
             b.Start();
-            await Wait(() => a.Status == SyncStatus.Connected && b.Status == SyncStatus.Connected, 60);
+            await Wait(() => a.Status == SyncStatus.Connected && b.Status == SyncStatus.Connected && seenByB.Count == 1, 60);
             output.WriteLine($"both clients connected via {b.ActiveUrl} after {sw.Elapsed.TotalSeconds:0.0}s");
 
-            uint soundId;
-            using (var bank = SabBank.Open(bankA))
-                soundId = bank.Entries[0].Id;
-            var sent = SyncChanges.Current(bankA, 0, soundId, "tunnel test");
             var t0 = sw.Elapsed;
-            a.Publish([sent]);
+            b.Request([("a", "Sender", seenByB[0].Sounds[0])]);
             await Wait(() => { lock (received) return received.Count == 1; }, 60);
-            output.WriteLine($"change ({sent.Data.Length / 1024} KB) delivered live through the tunnel in {(sw.Elapsed - t0).TotalSeconds:0.00}s");
+            output.WriteLine($"sound ({entry.Size / 1024} KB) requested and delivered through the tunnel in {(sw.Elapsed - t0).TotalSeconds:0.00}s");
 
-            Assert.Equal(sent.Data, received[0].Data);
-            Assert.Equal("Sender", received[0].Change.Author);
+            using (var bank = SabBank.Open(bankA))
+                Assert.Equal(bank.Entries[0].ReadOriginalData(), received[0]);
+            Assert.Equal("Sender", seenByB[0].Name);
         }
         finally
         {

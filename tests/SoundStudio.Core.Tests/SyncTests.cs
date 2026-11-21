@@ -7,8 +7,8 @@ using SoundStudio.Sync;
 namespace SoundStudio.Core.Tests;
 
 /// <summary>
-/// Two "PCs" (separate folders, each with its own copy of a game bank) syncing through a real in-process
-/// server on 127.0.0.1. Nothing leaves this machine.
+/// Two installs ("PCs": separate folders, each with its own copy of a game bank) syncing through a real
+/// in-process server on 127.0.0.1. Nothing leaves this machine.
 /// </summary>
 public sealed class SyncTests : IAsyncLifetime
 {
@@ -21,7 +21,7 @@ public sealed class SyncTests : IAsyncLifetime
     {
         _server = new SyncServer(new SyncServerOptions
         {
-            HostId = HostId, HostName = "Big brother", Token = Token,
+            HostId = HostId, HostName = "Host", Token = Token,
             DataFolder = Path.Combine(_dir.FullName, "server"), Port = 0, LoopbackOnly = true,
         });
         await _server.StartAsync();
@@ -35,37 +35,73 @@ public sealed class SyncTests : IAsyncLifetime
 
     private string Url => $"http://127.0.0.1:{_server.Port}";
 
+    /// <summary>One install: a sound folder with a copy of a bank, an editor, and what sync told it.</summary>
     private sealed class Pc(string root, string bankName)
     {
         public string Root { get; } = root;
         public string SoundFolder => Path.Combine(Root, "sound");
         public string BankPath => Path.Combine(SoundFolder, bankName);
         public BankEditor Editor { get; } = new(new OriginalsStore(Path.Combine(root, "originals")), new ChangeHistory(Path.Combine(root, "history.jsonl")), "me");
-        public List<IncomingChange> Received { get; } = [];
+        public IReadOnlyList<Manifest> Others { get; set; } = [];
+        public List<(WantedAudio Wanted, byte[] Data)> Received { get; } = [];
+
+        /// <summary>This install's modified sounds, as the app would describe them.</summary>
+        public List<ManifestEntry> Manifest()
+        {
+            using var bank = SabBank.Open(BankPath);
+            return bank.Entries.Where(e => e.IsModifiedOnDisk())
+                .Select(e => SyncState.Describe(BankPath, e.Index, e.Id, "test")).ToList();
+        }
+
+        public List<Difference> Differences()
+        {
+            var mine = Manifest().ToDictionary(e => e.Key);
+            using var bank = SabBank.Open(BankPath);
+            return SyncState.Compare(mine, Others, key =>
+                key.Bank == Path.GetFileName(BankPath) && key.Index < bank.Entries.Count && bank.Entries[key.Index].Id == key.Id
+                    ? Convert.ToHexString(bank.Entries[key.Index].Checksum)
+                    : null);
+        }
+
+        public uint IdAt(int index)
+        {
+            using var bank = SabBank.Open(BankPath);
+            return bank.Entries[index].Id;
+        }
+
+        public byte[] DataAt(int index)
+        {
+            using var bank = SabBank.Open(BankPath);
+            return bank.Entries[index].ReadOriginalData();
+        }
+
+        public void Replace(int index, int seed)
+        {
+            var data = new byte[3000 + seed];
+            new Random(seed).NextBytes(data);
+            Editor.Apply(BankPath, [new SoundChange(index, IdAt(index), data, data.Length / 2, "voice.wav")]);
+        }
     }
 
     private Pc MakePc(string name)
     {
-        var bank = Path.GetFileName(GameFolder.SmallCleanBank());
-        var pc = new Pc(Path.Combine(_dir.FullName, name), bank);
+        var source = GameFolder.SmallCleanBank();
+        var pc = new Pc(Path.Combine(_dir.FullName, name), Path.GetFileName(source));
         Directory.CreateDirectory(pc.SoundFolder);
-        File.Copy(GameFolder.SmallCleanBank(), pc.BankPath);
+        File.Copy(source, pc.BankPath);
         return pc;
     }
 
-    private SyncClient Client(Pc pc, string clientId, string author, string? url = null, string token = Token)
+    private SyncClient Client(Pc pc, string clientId, string name, string? url = null, string token = Token)
     {
-        var client = new SyncClient(new SyncConnection(HostId, "Big brother", token, [url ?? Url]), clientId, author,
-            Path.Combine(pc.Root, "sync"))
+        var client = new SyncClient(new SyncConnection(HostId, "Host", token, [url ?? Url]), clientId, name, Path.Combine(pc.Root, "sync"))
         {
             RetryDelay = TimeSpan.FromMilliseconds(200),
-            PollInterval = TimeSpan.FromSeconds(60), // must work via live updates and the wake signal, not polling
-        };
-        client.OnChanges = changes =>
-        {
-            lock (pc.Received)
-                pc.Received.AddRange(changes);
-            return Task.CompletedTask;
+            PollInterval = TimeSpan.FromSeconds(60), // must work via live updates, not polling
+            ManifestProvider = pc.Manifest,
+            AudioProvider = r => SyncState.ReadIfCurrent(pc.SoundFolder, r),
+            OnManifests = m => { pc.Others = m; return Task.CompletedTask; },
+            OnAudio = (w, data) => { lock (pc.Received) pc.Received.Add((w, data)); return Task.CompletedTask; },
         };
         return client;
     }
@@ -82,90 +118,146 @@ public sealed class SyncTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task A_change_on_one_pc_arrives_on_the_other_and_applies_identically()
+    public async Task Only_real_differences_are_offered_and_audio_moves_only_when_asked()
     {
         Skip.IfNot(GameFolder.Available, "BO2 sound folder not found.");
         var a = MakePc("a");
         var b = MakePc("b");
+        a.Replace(1, seed: 1);   // only A changed sound 1
+        a.Replace(2, seed: 2);   // both changed sound 2 identically
+        b.Replace(2, seed: 2);
+
         await using var clientA = Client(a, "pc-a", "Alex");
-        await using var clientB = Client(b, "pc-b", "Brother");
+        await using var clientB = Client(b, "pc-b", "Sam");
         clientA.Start();
         clientB.Start();
-        await WaitUntil(() => clientA.Status == SyncStatus.Connected && clientB.Status == SyncStatus.Connected);
+        await WaitUntil(() => b.Others.Any(m => m.ClientId == "pc-a" && m.Sounds.Count == 2));
 
-        // A replaces sound 1 and publishes it.
-        uint id;
-        using (var bank = SabBank.Open(a.BankPath))
-            id = bank.Entries[1].Id;
-        var data = new byte[3000];
-        Random.Shared.NextBytes(data);
-        a.Editor.Apply(a.BankPath, [new SoundChange(1, id, data, 1500, "voice.wav")]);
-        clientA.Publish([SyncChanges.Replace(a.BankPath, 1, id, data, 1500, "voice.wav")]);
+        // B is offered sound 1 only: sound 2 is identical on both PCs.
+        var diffs = b.Differences();
+        var diff = Assert.Single(diffs);
+        Assert.Equal(1, diff.Theirs.Index);
+        Assert.Equal(DifferenceKind.TheyChanged, diff.Kind);
+        Assert.Equal("Alex", diff.OwnerName);
+        Assert.Equal(0, _server.BlobCount); // nothing uploaded yet
 
-        // B hears about it (via WebSocket), checks it, and applies it.
+        // B asks; A (online) uploads just that one sound; B receives it byte for byte.
+        clientB.Request([(diff.OwnerId, diff.OwnerName, diff.Theirs)]);
         await WaitUntil(() => b.Received.Count == 1);
-        var incoming = b.Received[0];
-        Assert.Equal("Alex", incoming.Change.Author);
-        Assert.Equal("voice.wav", incoming.Change.SourceName);
-        Assert.Null(SyncChanges.CheckCompatible(incoming.Change, b.SoundFolder));
-        b.Editor.Apply(b.BankPath, [new SoundChange(incoming.Change.Index, incoming.Change.Id, incoming.Data!, incoming.Change.SampleCount)]);
+        Assert.Equal(a.DataAt(1), b.Received[0].Data);
+        Assert.Equal(1, _server.BlobCount);
+        Assert.Empty(clientB.Wanted);
 
-        Assert.Equal(File.ReadAllBytes(a.BankPath), File.ReadAllBytes(b.BankPath));
-        Assert.Empty(a.Received); // A doesn't get its own change back
-        Assert.Contains(_server.Peers, p => p.Name == "Brother");
-
-        // B reverts; A receives the revert.
-        b.Editor.Revert(b.BankPath, [1]);
-        clientB.Publish([(SyncChanges.Revert(b.BankPath, 1, id), null)]);
-        await WaitUntil(() => a.Received.Count == 1);
-        Assert.Equal(SyncAction.Revert, a.Received[0].Change.Action);
+        // B applies it: now the PCs match and nothing is offered any more.
+        b.Editor.Apply(b.BankPath, [new SoundChange(1, b.IdAt(1), b.Received[0].Data, diff.Theirs.SampleCount)]);
+        clientB.ManifestChanged();
+        await WaitUntil(() => a.Others.Any(m => m.ClientId == "pc-b" && m.Sounds.Count == 2));
+        Assert.Empty(b.Differences());
+        Assert.Empty(a.Differences());
+        Assert.Contains(_server.Peers, p => p.Name == "Sam" && p.Online);
     }
 
     [SkippableFact]
-    public async Task Changes_made_offline_are_sent_when_the_host_is_back()
+    public async Task A_request_waits_until_the_owner_is_back_online()
     {
         Skip.IfNot(GameFolder.Available, "BO2 sound folder not found.");
         var a = MakePc("a");
         var b = MakePc("b");
-        var deadUrl = "http://127.0.0.1:9"; // nothing listens there
-        await using var offline = Client(a, "pc-a", "Alex", url: deadUrl);
-        offline.Start();
-        uint id;
-        using (var bank = SabBank.Open(a.BankPath))
-            id = bank.Entries[0].Id;
-        offline.Publish([SyncChanges.Current(a.BankPath, 0, id, "test")]);
-        await WaitUntil(() => offline.Status == SyncStatus.Offline);
-        Assert.Equal(1, offline.OutboxCount);
-        await offline.DisposeAsync();
+        a.Replace(0, seed: 7);
 
-        // Same PC, now with the right address: the queued change goes out.
-        await using var online = Client(a, "pc-a", "Alex");
-        online.Start();
-        await WaitUntil(() => online.OutboxCount == 0);
+        // A publishes its manifest, then goes offline.
+        var clientA = Client(a, "pc-a", "Alex");
+        clientA.Start();
+        await WaitUntil(() => clientA.Status == SyncStatus.Connected);
+        await clientA.DisposeAsync();
 
-        await using var clientB = Client(b, "pc-b", "Brother");
+        await using var clientB = Client(b, "pc-b", "Sam");
         clientB.Start();
+        await WaitUntil(() => b.Others.Any(m => m.ClientId == "pc-a"));
+        var diff = Assert.Single(b.Differences());
+        clientB.Request([(diff.OwnerId, diff.OwnerName, diff.Theirs)]);
+        await Task.Delay(800);
+        Assert.Empty(b.Received);       // owner is offline: still waiting
+        Assert.Single(clientB.Wanted);
+
+        // B restarts meanwhile: the request is remembered.
+        await clientB.DisposeAsync();
+        await using var clientB2 = Client(b, "pc-b", "Sam");
+        Assert.Single(clientB2.Wanted);
+        clientB2.Start();
+
+        // A comes back: it sees the waiting request and uploads; B gets it.
+        await using var clientA2 = Client(a, "pc-a", "Alex");
+        clientA2.Start();
         await WaitUntil(() => b.Received.Count == 1);
-        Assert.Equal(id, b.Received[0].Change.Id);
+        Assert.Equal(a.DataAt(0), b.Received[0].Data);
+    }
+
+    [SkippableFact]
+    public async Task Both_changed_differently_is_a_conflict_on_both_sides()
+    {
+        Skip.IfNot(GameFolder.Available, "BO2 sound folder not found.");
+        var a = MakePc("a");
+        var b = MakePc("b");
+        a.Replace(1, seed: 10);
+        b.Replace(1, seed: 20);
+        await using var clientA = Client(a, "pc-a", "Alex");
+        await using var clientB = Client(b, "pc-b", "Sam");
+        clientA.Start();
+        clientB.Start();
+        await WaitUntil(() => a.Others.Count == 1 && b.Others.Count == 1);
+        Assert.Equal(DifferenceKind.BothChanged, Assert.Single(a.Differences()).Kind);
+        Assert.Equal(DifferenceKind.BothChanged, Assert.Single(b.Differences()).Kind);
+    }
+
+    [SkippableFact]
+    public void Sounds_from_another_game_version_are_not_offered()
+    {
+        Skip.IfNot(GameFolder.Available, "BO2 sound folder not found.");
+        var b = MakePc("b");
+        var theirs = SyncState.Describe(b.BankPath, 0, b.IdAt(0), null) with
+        {
+            Hash = new string('a', 64),
+            OriginalChecksum = new string('0', 32), // their bank started from different audio
+        };
+        b.Others = [new Manifest { ClientId = "x", Name = "X", Sounds = [theirs] }];
+        Assert.Empty(b.Differences());
+
+        b.Others = [new Manifest { ClientId = "x", Name = "X", Sounds = [theirs with { OriginalChecksum = SyncState.Describe(b.BankPath, 0, b.IdAt(0), null).OriginalChecksum }] }];
+        Assert.Single(b.Differences());
     }
 
     [Fact]
-    public async Task Wrong_token_is_rejected_and_hello_reveals_nothing_secret()
+    public async Task Host_refuses_bad_tokens_unrequested_audio_and_bad_manifests()
     {
         using var http = new HttpClient { BaseAddress = new Uri(Url) };
         var hello = await http.GetStringAsync("/api/hello");
         Assert.Contains(HostId, hello);
         Assert.DoesNotContain(Token, hello);
 
-        Assert.Equal(HttpStatusCode.Unauthorized, (await http.GetAsync("/api/changes")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await http.GetAsync("/api/manifests")).StatusCode);
         http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "nope");
-        Assert.Equal(HttpStatusCode.Unauthorized, (await http.GetAsync("/api/changes")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await http.GetAsync("/api/manifests")).StatusCode);
 
-        // A blob whose content doesn't match its name is refused.
         http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Token);
-        var put = await http.PutAsync($"/api/blobs/{new string('a', 64)}", new ByteArrayContent([1, 2, 3]));
+        http.DefaultRequestHeaders.Add("X-Client-Id", "me");
+
+        // Audio nobody asked for is refused: audio only travels on request.
+        var data = new byte[] { 1, 2, 3 };
+        var put = await http.PutAsync($"/api/blobs/{SyncProtocol.Sha256Hex(data)}", new ByteArrayContent(data));
         Assert.Equal(HttpStatusCode.BadRequest, put.StatusCode);
+
+        // A manifest pointing outside the sound folder, or published for someone else, is refused.
+        var entry = new ManifestEntry { Bank = @"..\evil.sabs", Index = 0, Id = 1, OriginalChecksum = new string('0', 32), Hash = new string('a', 64) };
+        Assert.Equal(HttpStatusCode.BadRequest, (await PutManifest(http, new Manifest { ClientId = "me", Name = "Me", Sounds = [entry] })).StatusCode);
+        var ok = entry with { Bank = "zmb_tomb.all.sabl" };
+        Assert.Equal(HttpStatusCode.BadRequest, (await PutManifest(http, new Manifest { ClientId = "someone-else", Name = "X", Sounds = [ok] })).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await PutManifest(http, new Manifest { ClientId = "me", Name = "Me", Sounds = [ok] })).StatusCode);
     }
+
+    private static Task<HttpResponseMessage> PutManifest(HttpClient http, Manifest m) =>
+        http.PutAsync("/api/manifest", new StringContent(System.Text.Json.JsonSerializer.Serialize(m, SyncProtocol.Json),
+            System.Text.Encoding.UTF8, "application/json"));
 
     [SkippableFact]
     public async Task Bad_token_client_reports_a_clear_error()
@@ -176,6 +268,26 @@ public sealed class SyncTests : IAsyncLifetime
         client.Start();
         await WaitUntil(() => client.Status == SyncStatus.Offline);
         Assert.Contains("rejected the invite code", client.LastError);
+    }
+
+    /// <summary>Regression: stopping the host while someone's connection has died must not throw.</summary>
+    [Fact]
+    public async Task Host_stops_cleanly_when_a_connection_died()
+    {
+        var server = new SyncServer(new SyncServerOptions
+        {
+            HostId = "h2", HostName = "H", Token = Token, Port = 0, LoopbackOnly = true,
+            DataFolder = Path.Combine(_dir.FullName, "server2"),
+        });
+        await server.StartAsync();
+        var ws = new System.Net.WebSockets.ClientWebSocket();
+        ws.Options.SetRequestHeader("Authorization", "Bearer " + Token);
+        await ws.ConnectAsync(new Uri($"ws://127.0.0.1:{server.Port}/api/live"), CancellationToken.None);
+        await ws.ReceiveAsync(new byte[64], CancellationToken.None); // "hello"
+        ws.Abort();
+        ws.Dispose();
+        await Task.Delay(200);
+        await server.DisposeAsync(); // must not throw
     }
 
     [Fact]
@@ -223,7 +335,6 @@ public sealed class SyncTests : IAsyncLifetime
     {
         var without = await Reachability.RoutesAsync(5150, "https://tmp.trycloudflare.com");
         Assert.DoesNotContain(without, r => r.Label.StartsWith("Your address"));
-
         var with = await Reachability.RoutesAsync(5150, "https://tmp.trycloudflare.com", publicUrl: "https://sounds.example.com");
         var urls = with.Select(r => r.Url).ToList();
         Assert.True(urls.IndexOf("https://sounds.example.com") < urls.IndexOf("https://tmp.trycloudflare.com"));
@@ -236,69 +347,19 @@ public sealed class SyncTests : IAsyncLifetime
     [InlineData("notes.txt")]
     public void Rejects_bank_names_that_are_not_plain_bank_files(string bank)
     {
-        var change = new SyncChange
+        var entry = new ManifestEntry { Bank = bank, Index = 0, Id = 1, OriginalChecksum = new string('0', 32), Hash = new string('a', 64) };
+        Assert.Equal("Invalid bank name.", SyncProtocol.Validate(entry));
+        Assert.Null(SyncState.ReadIfCurrent(@"C:\nowhere", new AudioRequest
         {
-            ClientId = "c", Author = "a", Action = SyncAction.Revert, Bank = bank, Index = 0, Id = 1,
-            OriginalChecksum = new string('0', 32),
-        };
-        Assert.Equal("Invalid bank name.", SyncProtocol.Validate(change));
-        Assert.Equal("Invalid bank name.", SyncChanges.CheckCompatible(change, @"C:\nowhere"));
-    }
-
-    [Fact]
-    public async Task Server_refuses_invalid_changes()
-    {
-        using var http = new HttpClient { BaseAddress = new Uri(Url) };
-        http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Token);
-        var bad = new SyncChange
-        {
-            ClientId = "c", Author = "a", Action = SyncAction.Revert, Bank = @"..\evil.sabs", Index = 0, Id = 1,
-            OriginalChecksum = new string('0', 32),
-        };
-        var response = await http.PostAsync("/api/changes",
-            new StringContent(System.Text.Json.JsonSerializer.Serialize(bad, SyncProtocol.Json), System.Text.Encoding.UTF8, "application/json"));
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-    }
-
-    /// <summary>Regression: stopping the host while a friend's connection has died must not throw.</summary>
-    [Fact]
-    public async Task Host_stops_cleanly_when_a_friend_connection_died()
-    {
-        var server = new SyncServer(new SyncServerOptions
-        {
-            HostId = "h2", HostName = "H", Token = Token, Port = 0, LoopbackOnly = true,
-            DataFolder = Path.Combine(_dir.FullName, "server2"),
-        });
-        await server.StartAsync();
-        var ws = new System.Net.WebSockets.ClientWebSocket();
-        ws.Options.SetRequestHeader("Authorization", "Bearer " + Token);
-        await ws.ConnectAsync(new Uri($"ws://127.0.0.1:{server.Port}/api/live"), CancellationToken.None);
-        await ws.ReceiveAsync(new byte[64], CancellationToken.None); // "seq:0"
-        ws.Abort(); // like a tunnel or Wi-Fi dropping
-        ws.Dispose();
-        await Task.Delay(200);
-        await server.DisposeAsync(); // must not throw
+            RequesterId = "r", OwnerId = "o", Bank = bank, Index = 0, Id = 1, Hash = new string('a', 64),
+        }));
     }
 
     [Fact]
     public void Cleans_names_from_other_people()
     {
-        Assert.Equal("Bro", SyncProtocol.CleanName("Bro\\..\\"));
-        Assert.Equal("Friend", SyncProtocol.CleanName("  "));
+        Assert.Equal("Sam", SyncProtocol.CleanName("Sam\\..\\"));
+        Assert.Equal("Someone", SyncProtocol.CleanName("  "));
         Assert.Equal(40, SyncProtocol.CleanName(new string('x', 200)).Length);
-    }
-
-    [SkippableFact]
-    public void Incompatible_changes_are_detected()
-    {
-        Skip.IfNot(GameFolder.Available, "BO2 sound folder not found.");
-        var a = MakePc("a");
-        uint id;
-        using (var bank = SabBank.Open(a.BankPath))
-            id = bank.Entries[0].Id;
-        var (change, _) = SyncChanges.Current(a.BankPath, 0, id, null);
-        Assert.Null(SyncChanges.CheckCompatible(change, a.SoundFolder));
-        Assert.Contains("different game version", SyncChanges.CheckCompatible(change with { OriginalChecksum = new string('0', 32) }, a.SoundFolder));
-        Assert.Contains("don't have", SyncChanges.CheckCompatible(change with { Bank = "nope.all.sabl" }, a.SoundFolder));
     }
 }
