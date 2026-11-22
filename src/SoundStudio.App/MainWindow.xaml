@@ -385,6 +385,35 @@
                                                Content="Layer sounds…"
                                                Command="{Binding DataContext.LayerSelectedCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                ToolTip="Stack files, recordings and the game's own audio into one sound, each with its own volume (Ctrl+L)" />
+                                    <ui:Button HorizontalAlignment="Stretch" Icon="{ui:SymbolIcon Edit24}" Margin="0,0,0,8"
+                                               Content="{Binding DataContext.EditExternallyLabel, RelativeSource={RelativeSource AncestorType=Window}}"
+                                               Command="{Binding DataContext.EditExternallyCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                               ToolTip="Ctrl+E">
+                                        <ui:Button.ContextMenu>
+                                            <ContextMenu>
+                                                <MenuItem Header="Use a different editor…"
+                                                          Command="{Binding PlacementTarget.Tag.ChooseExternalEditorCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                            </ContextMenu>
+                                        </ui:Button.ContextMenu>
+                                        <ui:Button.Tag>
+                                            <Binding Path="DataContext" RelativeSource="{RelativeSource AncestorType=Window}" />
+                                        </ui:Button.Tag>
+                                    </ui:Button>
+                                    <Border Margin="0,0,0,8" Padding="12,10" CornerRadius="6"
+                                            Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                                            Visibility="{Binding IsEditingExternally, Converter={StaticResource BoolToVisibility}}">
+                                        <StackPanel>
+                                            <TextBlock TextWrapping="Wrap" FontSize="12">
+                                                <Run Text="Open in" /> <Run Text="{Binding EditingIn, Mode=OneWay}" /><Run Text=" — export to update." />
+                                            </TextBlock>
+                                            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                                <ui:Button Content="Find export…" Margin="0,0,6,0" Padding="10,4" FontSize="12"
+                                                           Command="{Binding DataContext.PickExternalEditCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
+                                                <ui:Button Content="Done" Padding="10,4" FontSize="12"
+                                                           Command="{Binding DataContext.StopExternalEditCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </Border>
                                     <ui:Button HorizontalAlignment="Stretch" Icon="{ui:SymbolIcon ArrowSwap24}"
                                                Command="{Binding DataContext.ReplaceSelectedCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                ToolTip="Pick an audio file to replace this sound (Ctrl+R)">

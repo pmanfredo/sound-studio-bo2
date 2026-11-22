@@ -17,7 +17,13 @@ public enum LayerKind { File, Recording, GameAudio, Original }
 /// <summary>What a layer editor had when its mix was staged, so reopening it picks up where it left off.</summary>
 public sealed record LayerSession(IReadOnlyList<LayerState> Layers, double MasterGainDb, bool PreventClipping, bool CutToOriginal, string MixPath);
 
-public sealed record LayerState(string Name, LayerKind Kind, DecodedAudio Audio, double GainDb, double OffsetSeconds, bool Muted);
+public sealed record LayerState(string Name, LayerKind Kind, DecodedAudio Audio, double GainDb, double OffsetSeconds, bool Muted)
+{
+    public double TrimStart { get; init; }
+    public double TrimEnd { get; init; }
+    public double FadeIn { get; init; }
+    public double FadeOut { get; init; }
+}
 
 /// <summary>
 /// Layer several sounds into one: files, recordings, the game's current audio and the saved original, each with
@@ -39,6 +45,10 @@ public sealed partial class LayersViewModel : ObservableObject, IDisposable
     private LayerViewModel? _soloLayer;
     private int _remixVersion;
     private int _recordings;
+    private readonly Dictionary<LayerViewModel, ExternalEditSession> _externalEdits = [];
+
+    /// <summary>"Edit in Audacity…" (or the editor the user chose).</summary>
+    public string EditExternallyLabel => $"Edit in {ExternalEditor.DisplayName(ExternalEditor.Resolve(_settings))}…";
 
     public LayersViewModel(SoundRowViewModel target, AppSettings settings, OriginalsStore originals,
         Func<string, LayerSession, Task> stage)
@@ -187,7 +197,7 @@ public sealed partial class LayersViewModel : ObservableObject, IDisposable
     {
         if (_dragging)
             return;
-        var end = Layers.Select(l => l.OffsetSeconds + l.DurationSeconds).DefaultIfEmpty(0).Max();
+        var end = Layers.Select(l => l.EndSeconds).DefaultIfEmpty(0).Max();
         var longest = Math.Max(Math.Max(end, OriginalSeconds), 0.5);
         TimelineSeconds = NiceCeiling(longest * 1.25);
     }
@@ -235,7 +245,7 @@ public sealed partial class LayersViewModel : ObservableObject, IDisposable
             PreventClipping = session.PreventClipping;
             CutToOriginal = session.CutToOriginal;
             foreach (var l in session.Layers)
-                Add(l.Name, l.Kind, l.Audio, l.GainDb, l.OffsetSeconds, l.Muted);
+                Add(l.Name, l.Kind, l.Audio, l.GainDb, l.OffsetSeconds, l.Muted).Restore(l);
         }
         else if (_gameAudio != null)
         {
@@ -320,12 +330,14 @@ public sealed partial class LayersViewModel : ObservableObject, IDisposable
     private void Record()
     {
         StopPlayback();
-        var recorder = new RecorderViewModel(Target, _settings, path =>
+        RecorderViewModel? recorder = null;
+        recorder = new RecorderViewModel(Target, _settings, path =>
         {
             try
             {
                 var take = ReplacementEncoder.Load(path);
-                Add($"Recording {++_recordings}", LayerKind.Recording, take);
+                // Recorded along with the mix or the game audio: put it where it was performed.
+                Add($"Recording {++_recordings}", LayerKind.Recording, take, offset: recorder?.KeptStartOnBacking ?? 0);
             }
             catch (Exception ex) when (ex is IOException or InvalidDataException)
             {
@@ -338,6 +350,12 @@ public sealed partial class LayersViewModel : ObservableObject, IDisposable
             UseLabel = "Add as layer",
             UseToolTip = "Add this take as a new layer in the mix",
         };
+        if (_mix is { FrameCount: > 0 } mix && Layers.Any(l => !l.Muted))
+            recorder.AddBackingTrack("Mix", () => Task.FromResult<DecodedAudio?>(mix));
+        if (_gameAudio is { } game)
+            recorder.AddBackingTrack("Game audio", () => Task.FromResult<DecodedAudio?>(game));
+        if (_originalAudio is { } original)
+            recorder.AddBackingTrack("Original", () => Task.FromResult<DecodedAudio?>(original));
         ShowRecorder?.Invoke(recorder);
     }
 
@@ -347,6 +365,8 @@ public sealed partial class LayersViewModel : ObservableObject, IDisposable
     {
         if (_soloLayer == layer)
             StopPlayback();
+        if (_externalEdits.Remove(layer, out var session))
+            session.Dispose();
         Layers.Remove(layer);
     }
 
@@ -367,6 +387,7 @@ public sealed partial class LayersViewModel : ObservableObject, IDisposable
     public void Duplicate(LayerViewModel layer)
     {
         var copy = Add(layer.Name + " (copy)", layer.Kind, layer.Audio, layer.GainDb, layer.OffsetSeconds, layer.Muted);
+        copy.Restore(layer.ToState());
         Layers.Move(Layers.IndexOf(copy), Layers.IndexOf(layer) + 1);
     }
 
@@ -377,13 +398,70 @@ public sealed partial class LayersViewModel : ObservableObject, IDisposable
         StopPlayback();
         if (wasThis)
             return;
-        var audio = AudioEdit.ApplyGain(layer.Audio, layer.GainDb, preventClipping: false).Audio;
+        var audio = LayerMixer.Mix([layer.ToMixLayer() with { Offset = TimeSpan.Zero, Muted = false }],
+            layer.Audio.SampleRate, layer.Audio.Channels, preventClipping: false).Audio;
+        if (audio.FrameCount == 0)
+            return;
         _player.Load(audio);
         _player.Play();
         _soloLayer = layer;
         layer.IsPlaying = true;
         PlayheadSeconds = layer.OffsetSeconds;
         _progressTimer.Start();
+    }
+
+    /// <summary>
+    /// Opens one layer, as it sounds now (trim, fades and volume applied), in the external editor; each export
+    /// replaces the layer's audio, keeping where it sits in the mix.
+    /// </summary>
+    public void EditExternally(LayerViewModel layer)
+    {
+        if (_externalEdits.TryGetValue(layer, out var open))
+        {
+            open.OpenEditor();
+            return;
+        }
+        var editor = ExternalEditor.Choose(_settings, Dialogs);
+        if (editor == null)
+            return;
+        OnPropertyChanged(nameof(EditExternallyLabel));
+        StopPlayback();
+        ExternalEditSession session;
+        try
+        {
+            var audio = LayerMixer.Mix([layer.ToMixLayer() with { Offset = TimeSpan.Zero, Muted = false }],
+                layer.Audio.SampleRate, layer.Audio.Channels, preventClipping: false).Audio;
+            var folder = Path.Combine(AppPaths.EditsFolder, "layers");
+            Directory.CreateDirectory(folder);
+            var invalid = Path.GetInvalidFileNameChars();
+            var stem = new string($"{Target.Name} - {Path.GetFileNameWithoutExtension(layer.Name)}".Select(c => invalid.Contains(c) ? '_' : c).ToArray());
+            var path = Path.Combine(folder, stem + ".wav");
+            audio.SaveWav(path);
+            session = new ExternalEditSession(editor, path, edited =>
+            {
+                try
+                {
+                    var updated = ReplacementEncoder.Load(edited);
+                    if (updated.FrameCount == 0)
+                        return;
+                    layer.ReplaceAudio(updated, updated.ComputePeaks(Math.Clamp((int)(updated.Duration.TotalSeconds * 400), 200, 8000)));
+                    UpdateTimeline();
+                }
+                catch (Exception ex) when (ex is IOException or InvalidDataException or NotSupportedException or InvalidOperationException)
+                {
+                    ErrorText = "Couldn't load the edit: " + ex.Message;
+                }
+            });
+            session.Start();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException
+                                       or System.ComponentModel.Win32Exception)
+        {
+            ErrorText = "Couldn't open the editor: " + ex.Message;
+            return;
+        }
+        _externalEdits[layer] = session;
+        layer.EditingIn = session.EditorName;
     }
 
     // ---- the mix -----------------------------------------------------------------------------------------
@@ -398,12 +476,7 @@ public sealed partial class LayersViewModel : ObservableObject, IDisposable
     {
         var version = ++_remixVersion;
         var info = Target.Info;
-        var layers = Layers.Select(l => new MixLayer(l.Audio)
-        {
-            GainDb = l.GainDb,
-            Offset = TimeSpan.FromSeconds(l.OffsetSeconds),
-            Muted = l.Muted,
-        }).ToList();
+        var layers = Layers.Select(l => l.ToMixLayer()).ToList();
         var master = MasterGainDb;
         var prevent = PreventClipping;
         TimeSpan? length = CutToOriginal ? info.Duration : null;
@@ -513,7 +586,7 @@ public sealed partial class LayersViewModel : ObservableObject, IDisposable
         var path = Path.Combine(folder, $"{Target.Name} (mix of {LayerCountText}, {DateTime.Now:yyyy-MM-dd HH-mm-ss}).wav");
         mix.SaveWav(path);
         var session = new LayerSession(
-            Layers.Select(l => new LayerState(l.Name, l.Kind, l.Audio, l.GainDb, l.OffsetSeconds, l.Muted)).ToList(),
+            Layers.Select(l => l.ToState()).ToList(),
             MasterGainDb, PreventClipping, CutToOriginal, path);
         RequestClose?.Invoke(this, EventArgs.Empty);
         await _stage(path, session);
@@ -533,6 +606,9 @@ public sealed partial class LayersViewModel : ObservableObject, IDisposable
 
     public void Dispose()
     {
+        foreach (var session in _externalEdits.Values)
+            session.Dispose();
+        _externalEdits.Clear();
         _remixTimer.Stop();
         _progressTimer.Stop();
         _player.Dispose();
@@ -549,10 +625,90 @@ public sealed partial class LayerViewModel(LayersViewModel owner, string name, L
 
     public string Name { get; } = name;
     public LayerKind Kind { get; } = kind;
-    public DecodedAudio Audio { get; } = audio;
-    public float[] Peaks { get; } = peaks;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(DurationSeconds), nameof(ClipSeconds), nameof(EndSeconds), nameof(DurationText), nameof(InfoText))]
+    private DecodedAudio _audio = audio;
+
+    [ObservableProperty] private float[] _peaks = peaks;
+
+    /// <summary>Open in an external editor: its name, or null.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(InfoText))]
+    private string? _editingIn;
+
+    /// <summary>New audio from the editor: it already has the trim, fades and volume baked in, so those reset.</summary>
+    public void ReplaceAudio(DecodedAudio audio, float[] peaks)
+    {
+        TrimStart = 0;
+        TrimEnd = 0;
+        FadeIn = 0;
+        FadeOut = 0;
+        GainDb = 0;
+        Peaks = peaks;
+        Audio = audio;
+        Changed?.Invoke(this, EventArgs.Empty);
+    }
+    /// <summary>Length of the whole source audio, and of the part kept after trimming.</summary>
     public double DurationSeconds => Audio.Duration.TotalSeconds;
-    public string DurationText => SoundRowViewModel.FormatDuration(Audio.Duration);
+    public double ClipSeconds => Math.Max(0, DurationSeconds - TrimStart - TrimEnd);
+    public double EndSeconds => OffsetSeconds + ClipSeconds;
+    public string DurationText => SoundRowViewModel.FormatDuration(TimeSpan.FromSeconds(ClipSeconds));
+    public bool HasFades => FadeIn > 0.0005 || FadeOut > 0.0005;
+
+    /// <summary>Seconds cut off the start / end of the source.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ClipSeconds), nameof(EndSeconds), nameof(DurationText), nameof(InfoText))]
+    private double _trimStart;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ClipSeconds), nameof(EndSeconds), nameof(DurationText), nameof(InfoText))]
+    private double _trimEnd;
+
+    /// <summary>Fade lengths in seconds, inside the kept part.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasFades), nameof(InfoText))]
+    private double _fadeIn;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasFades), nameof(InfoText))]
+    private double _fadeOut;
+
+    /// <summary>Smallest piece a clip can be trimmed down to.</summary>
+    public const double MinClipSeconds = 0.02;
+
+    /// <summary>Keeps fades inside the clip after trimming.</summary>
+    public void ClampFades()
+    {
+        FadeIn = Math.Clamp(FadeIn, 0, ClipSeconds);
+        FadeOut = Math.Clamp(FadeOut, 0, ClipSeconds - FadeIn);
+    }
+
+    public void Restore(LayerState state)
+    {
+        TrimStart = state.TrimStart;
+        TrimEnd = state.TrimEnd;
+        FadeIn = state.FadeIn;
+        FadeOut = state.FadeOut;
+    }
+
+    public LayerState ToState() => new(Name, Kind, Audio, GainDb, OffsetSeconds, Muted)
+    {
+        TrimStart = TrimStart,
+        TrimEnd = TrimEnd,
+        FadeIn = FadeIn,
+        FadeOut = FadeOut,
+    };
+
+    public MixLayer ToMixLayer() => new(Audio)
+    {
+        GainDb = GainDb,
+        Offset = TimeSpan.FromSeconds(OffsetSeconds),
+        Muted = Muted,
+        TrimStart = TimeSpan.FromSeconds(TrimStart),
+        TrimEnd = TimeSpan.FromSeconds(TrimEnd),
+        FadeIn = TimeSpan.FromSeconds(FadeIn),
+        FadeOut = TimeSpan.FromSeconds(FadeOut),
+    };
 
     public Wpf.Ui.Controls.SymbolRegular Icon => Kind switch
     {
@@ -568,10 +724,10 @@ public sealed partial class LayerViewModel(LayersViewModel owner, string name, L
     public string GainText => Math.Abs(GainDb) < 0.05 ? "0 dB" : $"{GainDb:+0.0;-0.0} dB";
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(OffsetText), nameof(InfoText))]
+    [NotifyPropertyChangedFor(nameof(OffsetText), nameof(InfoText), nameof(EndSeconds))]
     private double _offsetSeconds;
     public string OffsetText => OffsetSeconds < 0.0005 ? "starts at 0" : $"starts at {OffsetSeconds:0.00} s";
-    public string InfoText => $"{DurationText} · {OffsetText}";
+    public string InfoText => EditingIn != null ? $"{DurationText} · open in {EditingIn}" : $"{DurationText} · {OffsetText}";
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(WaveOpacity))]
@@ -582,12 +738,24 @@ public sealed partial class LayerViewModel(LayersViewModel owner, string name, L
     partial void OnGainDbChanged(double value) => Changed?.Invoke(this, EventArgs.Empty);
     partial void OnOffsetSecondsChanged(double value) => Changed?.Invoke(this, EventArgs.Empty);
     partial void OnMutedChanged(bool value) => Changed?.Invoke(this, EventArgs.Empty);
+    partial void OnTrimStartChanged(double value) => Changed?.Invoke(this, EventArgs.Empty);
+    partial void OnTrimEndChanged(double value) => Changed?.Invoke(this, EventArgs.Empty);
+    partial void OnFadeInChanged(double value) => Changed?.Invoke(this, EventArgs.Empty);
+    partial void OnFadeOutChanged(double value) => Changed?.Invoke(this, EventArgs.Empty);
 
     [RelayCommand] private void Play() => Owner.PlayLayer(this);
     [RelayCommand] private void Remove() => Owner.Remove(this);
     [RelayCommand] private void MoveUp() => Owner.MoveUp(this);
     [RelayCommand] private void MoveDown() => Owner.MoveDown(this);
     [RelayCommand] private void Duplicate() => Owner.Duplicate(this);
+    [RelayCommand] private void EditExternally() => Owner.EditExternally(this);
     [RelayCommand] private void ResetGain() => GainDb = 0;
     [RelayCommand] private void ResetOffset() => OffsetSeconds = 0;
+
+    [RelayCommand]
+    private void RemoveFades()
+    {
+        FadeIn = 0;
+        FadeOut = 0;
+    }
 }

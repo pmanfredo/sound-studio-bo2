@@ -44,6 +44,12 @@ public sealed partial class SoundRowViewModel : ObservableObject
     public bool ShowOfferPill => HasOffer && !HasPending;
 
     public bool HasPending => Pending != null;
+
+    /// <summary>Open in an external editor: its name ("Audacity"), or null.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsEditingExternally))]
+    private string? _editingIn;
+    public bool IsEditingExternally => EditingIn != null;
     public bool CanReplace => Info.CanReplace && Info.Format != Core.Bo2.AudioFormat.Mp3;
 
     /// <summary>The grid shows "Pending" instead of "Modified" while a change is staged.</summary>

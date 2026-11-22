@@ -153,6 +153,9 @@
                                                             <MenuItem Header="Move to the start" Command="{Binding ResetOffsetCommand}" />
                                                             <MenuItem Header="Reset volume" Command="{Binding ResetGainCommand}" />
                                                             <Separator />
+                                                            <MenuItem Header="{Binding Owner.EditExternallyLabel}" Command="{Binding EditExternallyCommand}" />
+                                                            <MenuItem Header="Remove fades" Command="{Binding RemoveFadesCommand}" />
+                                                            <Separator />
                                                             <MenuItem Header="Duplicate" Command="{Binding DuplicateCommand}" />
                                                             <MenuItem Header="Move track up" Command="{Binding MoveUpCommand}" />
                                                             <MenuItem Header="Move track down" Command="{Binding MoveDownCommand}" />
@@ -208,7 +211,7 @@
                 <TextBlock Grid.Row="3" Margin="14,8,14,8" FontSize="12" TextWrapping="Wrap"
                            Foreground="{DynamicResource TextFillColorTertiaryBrush}"
                            Visibility="{Binding HasLayers, Converter={StaticResource BoolToVisibility}}"
-                           Text="Drag a clip to change when it plays; it snaps to the start, other clips and where the original ends (hold Shift to move freely). Click the ruler to play from there. Ctrl+scroll zooms, Shift+scroll moves through time." />
+                           Text="Drag a clip to change when it plays; it snaps to the start, other clips and where the original ends (hold Shift to move freely). Drag edges to trim, top corners to fade. Click the ruler to play from there. Ctrl+scroll zooms, Shift+scroll moves through time." />
             </Grid>
         </Border>
 

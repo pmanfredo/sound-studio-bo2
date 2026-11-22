@@ -10,6 +10,14 @@ public sealed record MixLayer(DecodedAudio Audio)
     public TimeSpan Offset { get; init; }
 
     public bool Muted { get; init; }
+
+    /// <summary>How much is cut off the start and the end of <see cref="Audio"/>.</summary>
+    public TimeSpan TrimStart { get; init; }
+    public TimeSpan TrimEnd { get; init; }
+
+    /// <summary>Fade in at the start and fade out at the end of the (trimmed) clip.</summary>
+    public TimeSpan FadeIn { get; init; }
+    public TimeSpan FadeOut { get; init; }
 }
 
 /// <summary>The result of mixing: the audio, and what the master volume ended up being.</summary>
@@ -26,7 +34,7 @@ public static class LayerMixer
     /// Sums the unmuted layers (each converted to <paramref name="sampleRate"/>/<paramref name="channels"/>, with its
     /// own volume and start offset), then applies <paramref name="masterGainDb"/>. With
     /// <paramref name="preventClipping"/> the master volume is lowered just enough that nothing distorts;
-    /// otherwise peaks are clipped. The mix is as long as the longest layer, or <paramref name="length"/> if given.
+    /// otherwise peaks are clipped. Each layer is trimmed first, then faded, then placed at its offset. The mix is as long as the longest layer, or <paramref name="length"/> if given.
     /// </summary>
     public static MixResult Mix(IReadOnlyList<MixLayer> layers, int sampleRate, int channels, double masterGainDb = 0,
         bool preventClipping = true, TimeSpan? length = null)
@@ -35,23 +43,41 @@ public static class LayerMixer
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(channels);
 
         var active = layers.Where(l => !l.Muted && l.Audio.FrameCount > 0)
-            .Select(l => (Layer: l, Audio: ReplacementEncoder.Convert(l.Audio, sampleRate, channels),
-                Start: (int)Math.Round(Math.Max(0, l.Offset.TotalSeconds) * sampleRate)))
+            .Select(l =>
+            {
+                var audio = ReplacementEncoder.Convert(l.Audio, sampleRate, channels);
+                var from = Math.Clamp((int)Math.Round(l.TrimStart.TotalSeconds * sampleRate), 0, audio.FrameCount);
+                var to = Math.Clamp(audio.FrameCount - (int)Math.Round(l.TrimEnd.TotalSeconds * sampleRate), from, audio.FrameCount);
+                return (Layer: l, Audio: audio, From: from, Frames: to - from,
+                    Start: (int)Math.Round(Math.Max(0, l.Offset.TotalSeconds) * sampleRate));
+            })
+            .Where(a => a.Frames > 0)
             .ToList();
 
         var frames = length is { } fixedLength
             ? (int)Math.Round(fixedLength.TotalSeconds * sampleRate)
-            : active.Count == 0 ? 0 : active.Max(a => a.Start + a.Audio.FrameCount);
+            : active.Count == 0 ? 0 : active.Max(a => a.Start + a.Frames);
 
         var mix = new float[(long)frames * channels];
-        foreach (var (layer, audio, start) in active)
+        foreach (var (layer, audio, from, clipFrames, start) in active)
         {
             var gain = (float)Math.Pow(10, layer.GainDb / 20);
             var samples = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, short>(audio.Pcm16.AsSpan());
-            var count = Math.Min(audio.FrameCount, frames - start) * channels;
-            var dest = start * channels;
-            for (var i = 0; i < count; i++)
-                mix[dest + i] += samples[i] / 32768f * gain;
+            var fadeIn = Math.Min(clipFrames, (int)Math.Round(Math.Max(0, layer.FadeIn.TotalSeconds) * sampleRate));
+            var fadeOut = Math.Min(clipFrames, (int)Math.Round(Math.Max(0, layer.FadeOut.TotalSeconds) * sampleRate));
+            var count = Math.Min(clipFrames, frames - start);
+            for (var f = 0; f < count; f++)
+            {
+                var g = gain;
+                if (f < fadeIn)
+                    g *= (float)f / fadeIn;
+                if (clipFrames - f <= fadeOut)
+                    g *= (float)(clipFrames - f - 1) / fadeOut;
+                var src = (from + f) * channels;
+                var dest = (start + f) * channels;
+                for (var c = 0; c < channels; c++)
+                    mix[dest + c] += samples[src + c] / 32768f * g;
+            }
         }
 
         var peak = 0f;

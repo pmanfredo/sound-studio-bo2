@@ -75,7 +75,10 @@ public partial class App : Application
             var recorder = vm.CreateRecorder(demoRow, demo: true);
             recorder.Devices.Add(new SoundStudio.Audio.MicDevice("demo", "Microphone (USB Audio Device)", true));
             recorder.SelectedDevice = recorder.Devices[0];
-            recorder.LoadTake(DemoTake());
+            if (args.Contains("--ready"))
+                recorder.SelectedBacking = recorder.BackingTracks[^1]; // shows "While recording, play"
+            else
+                recorder.LoadTake(DemoTake());
             if (args.Contains("--too-long"))
                 recorder.ResetTrimCommand.Execute(null);
             recorder.Level = 0.62;
@@ -165,7 +168,7 @@ public partial class App : Application
                         if (Arg("--layer-file") is { } lf)
                             await lvm.AddFilesAsync(lf.Split('|'));
                         if (lvm.Layers.Count > 1) { lvm.Layers[1].GainDb = -6; lvm.Layers[1].OffsetSeconds = 0.3; }
-                        if (lvm.Layers.Count > 2) lvm.Layers[2].OffsetSeconds = 0.62;
+                        if (lvm.Layers.Count > 2) { lvm.Layers[2].OffsetSeconds = 0.62; lvm.Layers[2].TrimEnd = Math.Max(0, lvm.Layers[2].DurationSeconds * 0.4); lvm.Layers[2].FadeIn = 0.15; lvm.Layers[2].FadeOut = 0.3; }
                         if (lvm.Layers.Count > 3) lvm.Layers[3].Muted = true;
                         lvm.MasterGainDb = 3;
                         await Task.Delay(1200);
@@ -177,6 +180,19 @@ public partial class App : Application
                         File.AppendAllText(Path.ChangeExtension(path, ".log"),
                             $"LAYERS count={lvm.Layers.Count} mix={lvm.MixDurationText} note='{lvm.MixNote}' warn='{lvm.LengthWarning}' err='{lvm.ErrorText}'{Environment.NewLine}");
                         await lvm.UseAsReplacementCommand.ExecuteAsync(null);
+                        break;
+                    }
+                    case "external-edit" when vm.SelectedRow is { } er:
+                    {
+                        // Opens the sound in the external editor, then "exports" --layer-file over it like the editor would.
+                        await vm.EditExternallyCommand.ExecuteAsync(null);
+                        var edits = Directory.GetFiles(SoundStudio.Core.AppPaths.EditsFolder, "*.wav", SearchOption.AllDirectories);
+                        await Task.Delay(1500);
+                        foreach (var f in edits)
+                            File.Copy(Arg("--layer-file")!, f, overwrite: true);
+                        await Task.Delay(4000);
+                        File.AppendAllText(Path.ChangeExtension(path, ".log"),
+                            $"EXTERNAL editing='{er.EditingIn}' files={edits.Length} pending={er.Pending?.SourceFileName}{Environment.NewLine}");
                         break;
                     }
                     case "select-available":

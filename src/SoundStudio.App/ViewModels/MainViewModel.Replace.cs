@@ -61,8 +61,16 @@ public sealed partial class MainViewModel
     }
 
     /// <summary>A recorder whose "Use as replacement" stages the take for <paramref name="row"/>.</summary>
-    public RecorderViewModel CreateRecorder(SoundRowViewModel row, bool demo = false) =>
-        new(row, _settings, path => StageAsync([(row, path)], options: null), demo) { Dialogs = Dialogs };
+    public RecorderViewModel CreateRecorder(SoundRowViewModel row, bool demo = false)
+    {
+        var recorder = new RecorderViewModel(row, _settings, path => StageAsync([(row, path)], options: null), demo) { Dialogs = Dialogs };
+        var info = row.Info;
+        recorder.AddBackingTrack("Game audio",
+            () => Task.Run<DecodedAudio?>(() => AudioDecoder.Decode(Core.Bo2.SoundReader.Read(info.Bank.FilePath, info.Index, info.Id))));
+        if (row.Pending?.Prepared.Audio is { } staged)
+            recorder.AddBackingTrack("New version", () => Task.FromResult<DecodedAudio?>(staged));
+        return recorder;
+    }
 
     /// <summary>The last layer mix staged per sound, so "Layer sounds…" reopens with the same layers.</summary>
     private readonly Dictionary<SoundRowViewModel, LayerSession> _layerSessions = [];

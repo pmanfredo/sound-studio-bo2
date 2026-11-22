@@ -23,7 +23,7 @@
     <AssemblyName>SoundStudio</AssemblyName>
     <Product>Sound Studio</Product>
     <Description>Browse, replace, record and share Black Ops II sounds.</Description>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
 
     <!-- Velopack needs to run first thing in Main (install/update hooks), so Main is ours. -->

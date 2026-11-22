@@ -18,6 +18,9 @@ public static class AppPaths
     public static string RecordingsFolder => Path.Combine(DataFolder, "recordings");
     public static string SyncFolder => Path.Combine(DataFolder, "sync");
 
+    /// <summary>Sounds handed to an external editor (Audacity) are written here.</summary>
+    public static string EditsFolder => Path.Combine(DataFolder, "edits");
+
     /// <summary>Folders where a BO2 <c>sound</c> folder is commonly found, most likely first.</summary>
     public static IEnumerable<string> CandidateSoundFolders()
     {
@@ -55,6 +58,12 @@ public sealed class AppSettings
 
     /// <summary>Make recordings loud enough to sit next to the game's audio.</summary>
     public bool NormalizeRecordings { get; set; } = true;
+
+    /// <summary>What was last played while recording ("The game audio", "The mix so far"…), picked again next time.</summary>
+    public string? RecordBacking { get; set; }
+
+    /// <summary>Program used by "Edit in Audacity" when it isn't Audacity (or Audacity isn't found).</summary>
+    public string? ExternalEditorPath { get; set; }
 
     // ---- sync ----
 

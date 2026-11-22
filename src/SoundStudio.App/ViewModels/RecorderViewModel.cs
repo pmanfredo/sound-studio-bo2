@@ -12,6 +12,13 @@ namespace SoundStudio.App.ViewModels;
 
 public enum RecorderState { Ready, Countdown, Recording, Recorded }
 
+/// <summary>Something to play while recording (the game audio, the mix so far), so you can record in time with it.</summary>
+public sealed record BackingTrack(string Name, Func<Task<DecodedAudio?>>? Load)
+{
+    public static readonly BackingTrack None = new("Nothing", null);
+    public override string ToString() => Name;
+}
+
 /// <summary>Record a new take for one sound, trim it, check it against the original, and stage it.</summary>
 public sealed partial class RecorderViewModel : ObservableObject, IDisposable
 {
@@ -22,6 +29,14 @@ public sealed partial class RecorderViewModel : ObservableObject, IDisposable
     private readonly bool _demo;
     private readonly DispatcherTimer _meterTimer;
     private readonly AudioPlayer _player = new();
+    private readonly AudioPlayer _backingPlayer = new();
+    private bool _takeHadBacking;
+
+    /// <summary>
+    /// Roughly how long playback takes to reach the speakers; a take recorded along with a backing track is moved
+    /// earlier by this much so it lines up.
+    /// </summary>
+    private const double OutputLatencySeconds = 0.12;
     private MicRecorder? _recorder;
     private DecodedAudio? _take;
     private DecodedAudio? _originalAudio;
@@ -39,6 +54,7 @@ public sealed partial class RecorderViewModel : ObservableObject, IDisposable
         _useCountdown = settings.RecordCountdown;
         _normalize = settings.NormalizeRecordings;
         _player.Volume = settings.Volume;
+        _backingPlayer.Volume = settings.Volume;
         _meterTimer = new DispatcherTimer(DispatcherPriority.Render) { Interval = TimeSpan.FromMilliseconds(33) };
         _meterTimer.Tick += (_, _) => Tick();
         _player.PlaybackEnded += (_, _) => System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
@@ -78,6 +94,29 @@ public sealed partial class RecorderViewModel : ObservableObject, IDisposable
     public bool IsRecorded => State == RecorderState.Recorded;
     public bool CanRecord => State is RecorderState.Ready or RecorderState.Recorded && (_recorder != null || _demo);
 
+    /// <summary>What can be played while recording; the first is always "Nothing".</summary>
+    public ObservableCollection<BackingTrack> BackingTracks { get; } = [BackingTrack.None];
+    public bool HasBackingTracks => BackingTracks.Count > 1;
+    [ObservableProperty]
+    private BackingTrack _selectedBacking = BackingTrack.None;
+
+    public void AddBackingTrack(string name, Func<Task<DecodedAudio?>> load)
+    {
+        var track = new BackingTrack(name, load);
+        BackingTracks.Add(track);
+        OnPropertyChanged(nameof(HasBackingTracks));
+        if (name == _settings.RecordBacking)
+            SelectedBacking = track;
+    }
+
+    /// <summary>
+    /// For a take recorded along with a backing track: where its kept part belongs on the backing track's
+    /// timeline (seconds), or null when nothing was playing.
+    /// </summary>
+    public double? KeptStartOnBacking => _takeHadBacking && _take != null
+        ? Math.Max(0, TrimStart * _take.Duration.TotalSeconds - OutputLatencySeconds)
+        : null;
+
     [ObservableProperty] private string _countdownText = "";
     [ObservableProperty] private string _elapsedText = "0:00.0";
     [ObservableProperty] private bool _useCountdown;
@@ -113,6 +152,7 @@ public sealed partial class RecorderViewModel : ObservableObject, IDisposable
         : null;
 
     partial void OnUseCountdownChanged(bool value) => _settings.RecordCountdown = value;
+    partial void OnSelectedBackingChanged(BackingTrack value) => _settings.RecordBacking = value?.Load == null ? null : value.Name;
     partial void OnNormalizeChanged(bool value) => _settings.NormalizeRecordings = value;
 
     partial void OnMicLevelChanged(double value)
@@ -201,6 +241,18 @@ public sealed partial class RecorderViewModel : ObservableObject, IDisposable
             return;
         StopPreview();
         IsClipping = false;
+        DecodedAudio? backing = null;
+        if (SelectedBacking?.Load is { } load)
+        {
+            try
+            {
+                backing = await load();
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException)
+            {
+                ErrorText = $"Couldn't play {SelectedBacking?.Name.ToLowerInvariant()}: {ex.Message}";
+            }
+        }
         if (UseCountdown)
         {
             _countdownCts = new CancellationTokenSource();
@@ -220,6 +272,13 @@ public sealed partial class RecorderViewModel : ObservableObject, IDisposable
             }
         }
         _recorder.BeginRecording();
+        _takeHadBacking = false;
+        if (backing is { FrameCount: > 0 })
+        {
+            _backingPlayer.Load(backing);
+            _backingPlayer.Play();
+            _takeHadBacking = true;
+        }
         ElapsedText = "0:00.0";
         State = RecorderState.Recording;
     }
@@ -235,6 +294,8 @@ public sealed partial class RecorderViewModel : ObservableObject, IDisposable
         if (State != RecorderState.Recording || _recorder == null)
             return;
         var take = _recorder.EndRecording();
+        _backingPlayer.Stop();
+        _backingPlayer.Unload();
         if (take.FrameCount == 0)
         {
             State = RecorderState.Ready;
@@ -402,6 +463,7 @@ public sealed partial class RecorderViewModel : ObservableObject, IDisposable
         _countdownCts?.Cancel();
         _meterTimer.Stop();
         _player.Dispose();
+        _backingPlayer.Dispose();
         _recorder?.Dispose();
         _recorder = null;
         if (!_demo)

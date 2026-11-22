@@ -20,6 +20,7 @@ public partial class MainWindow : FluentWindow, IUserDialogs
         Closed += async (_, _) =>
         {
             viewModel.Player.Dispose();
+            viewModel.StopAllExternalEdits();
             await viewModel.Sync.DisposeAsync(); // stops hosting / the tunnel cleanly
         };
         PreviewKeyDown += OnPreviewKeyDown;
@@ -43,6 +44,11 @@ public partial class MainWindow : FluentWindow, IUserDialogs
         else if (e.Key == Key.R && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift))
         {
             ViewModel.RecordSelectedCommand.Execute(null);
+            e.Handled = true;
+        }
+        else if (e.Key == Key.E && Keyboard.Modifiers == ModifierKeys.Control)
+        {
+            ViewModel.EditExternallyCommand.Execute(null);
             e.Handled = true;
         }
         else if (e.Key == Key.L && Keyboard.Modifiers == ModifierKeys.Control)

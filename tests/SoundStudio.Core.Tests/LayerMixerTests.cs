@@ -86,4 +86,47 @@ public class LayerMixerTests
         Assert.All(Samples(r.Audio), v => Assert.Equal(0, v));
         Assert.Equal(0, LayerMixer.Mix([], 48000, 1).Audio.FrameCount);
     }
+
+    private static DecodedAudio Ramp(int frames, int rate = 48000)
+    {
+        var b = new byte[frames * 2];
+        for (var i = 0; i < frames; i++)
+        {
+            b[i * 2] = (byte)(i * 10);
+            b[i * 2 + 1] = (byte)((i * 10) >> 8);
+        }
+        return new DecodedAudio(b, rate, 1);
+    }
+
+    private static TimeSpan Frames(int n) => TimeSpan.FromSeconds(n / 48000.0);
+
+    [Fact]
+    public void Trim_keeps_only_the_middle_of_a_layer()
+    {
+        var r = LayerMixer.Mix([new MixLayer(Ramp(1000)) { TrimStart = Frames(100), TrimEnd = Frames(200), Offset = Frames(50) }], 48000, 1);
+        var s = Samples(r.Audio);
+        Assert.Equal(50 + 700, r.Audio.FrameCount);
+        Assert.Equal(0, s[10]);
+        Assert.InRange(s[50], 999, 1001);   // frame 100 of the source
+        Assert.InRange(s[749], 7989, 7991); // frame 799
+    }
+
+    [Fact]
+    public void Fades_ramp_the_clip_in_and_out()
+    {
+        var r = LayerMixer.Mix([new MixLayer(Constant(10000, 1000)) { FadeIn = Frames(100), FadeOut = Frames(100) }], 48000, 1);
+        var s = Samples(r.Audio);
+        Assert.Equal(0, s[0]);
+        Assert.InRange(s[50], 4900, 5100);
+        Assert.InRange(s[500], 9999, 10001);
+        Assert.InRange(s[949], 4900, 5100);
+        Assert.Equal(0, s[999]);
+    }
+
+    [Fact]
+    public void Trimming_everything_leaves_nothing()
+    {
+        var r = LayerMixer.Mix([new MixLayer(Constant(1000, 100)) { TrimStart = Frames(60), TrimEnd = Frames(60) }], 48000, 1);
+        Assert.Equal(0, r.Audio.FrameCount);
+    }
 }
