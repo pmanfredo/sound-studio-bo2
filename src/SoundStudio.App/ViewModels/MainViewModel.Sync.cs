@@ -71,6 +71,7 @@ public sealed partial class MainViewModel
             AudioHandler = OnAudioAsync,
         };
         Sync.AutoGetEnabled += (_, _) => _ = RefreshOffersAsync();
+        Sync.HideFromOthersChanged += (_, _) => _ = OnHideFromOthersChangedAsync();
     }
 
     /// <summary>Called after every (re)scan: our state may have changed, and so may what's worth offering.</summary>
@@ -90,6 +91,7 @@ public sealed partial class MainViewModel
     {
         var rows = _allRows; // the list is replaced on rescan, never changed in place
         var history = _historyBySound;
+        var hidden = _settings.HideMine;
         var result = new List<ManifestEntry>();
         foreach (var row in rows.Where(r => r.IsModified))
         {
@@ -104,7 +106,7 @@ public sealed partial class MainViewModel
                         .OrderBy(h => h.TimeUtc).LastOrDefault()?.Detail;
                     return SyncState.Describe(bank.FilePath, row.Info.Index, row.Info.Id, source);
                 });
-                result.Add(entry);
+                result.Add(hidden ? entry with { Source = null, Hidden = true } : entry);
             }
             catch (Exception ex) when (ex is IOException or InvalidOperationException or InvalidDataException) { }
         }
@@ -159,8 +161,9 @@ public sealed partial class MainViewModel
             if (byKey.TryGetValue(key, out var diff))
             {
                 var requested = wanted.TryGetValue(key, out var hash) && hash.Equals(diff.Theirs.Hash, StringComparison.OrdinalIgnoreCase);
-                if (row.Offer?.Difference != diff)
-                    row.Offer = new OfferViewModel(diff, requested, Sync);
+                var hidden = (diff.Theirs.Hidden || _settings.HideFromOthers) && !_settings.RevealedOffers.Contains(IgnoreKey(diff.Theirs));
+                if (row.Offer?.Difference != diff || row.Offer.IsHidden != hidden)
+                    row.Offer = new OfferViewModel(diff, requested, Sync, hidden);
                 _offerRows.Add(row);
             }
             else if (row.Offer != null)
@@ -194,6 +197,51 @@ public sealed partial class MainViewModel
         }
     }
 
+    /// <summary>"Hide others' sounds" also covers what has already arrived (except what the sender chose to hide).</summary>
+    private async Task OnHideFromOthersChangedAsync()
+    {
+        foreach (var row in _pendingRows.ToList())
+        {
+            var hidden = (row.Pending?.SenderHidden == true || _settings.HideFromOthers) && !IsRevealed(row);
+            if (row.Pending is { FromAuthor: not null } p && p.IsHidden != hidden)
+                SetPending(row, p.With(p.Prepared, hidden: hidden));
+        }
+        RefreshPendingState();
+        await RefreshOffersAsync();
+        if (SelectedRow != null)
+            await Player.LoadAsync(SelectedRow, autoPlay: false);
+    }
+
+    private bool IsRevealed(SoundRowViewModel row) =>
+        row.Offer is { } o && _settings.RevealedOffers.Contains(IgnoreKey(o.Difference.Theirs));
+
+    /// <summary>
+    /// "Which sound is it?" on someone's hidden change for a sound you've changed yourself: after asking, stop hiding
+    /// it, so you know which of your changes it would replace.
+    /// </summary>
+    [RelayCommand]
+    private async Task RevealSelectedAsync()
+    {
+        if (SelectedRow is not { ShowOverlapNote: true } row)
+            return;
+        var owner = row.Offer?.OwnerName ?? row.Pending?.FromAuthor ?? "they";
+        if (!await Dialogs.ConfirmAsync("Show which sound this is?",
+                $"{owner}'s change won't be hidden anymore. You'll see which sound it is and can listen to it.", "Show it"))
+            return;
+        if (row.Offer is { } offer && !IsRevealed(row))
+        {
+            _settings.RevealedOffers.Add(IgnoreKey(offer.Difference.Theirs));
+            try { _settings.Save(); }
+            catch (IOException) { }
+        }
+        if (row.Pending is { IsHidden: true } p)
+            SetPending(row, p.With(p.Prepared, hidden: false));
+        RefreshPendingState();
+        await RefreshOffersAsync();
+        if (SelectedRow == row)
+            await Player.LoadAsync(row, autoPlay: false);
+    }
+
     private static string IgnoreKey(ManifestEntry e) => $"{e.Bank}|{e.Index}|{e.Id}|{e.Hash}";
 
     // ---- get / ignore ----------------------------------------------------------------------------------------
@@ -207,7 +255,7 @@ public sealed partial class MainViewModel
 
     [RelayCommand]
     private void GetAllShown() =>
-        RequestOffers(VisibleRows.Where(r => r.Offer is { Requested: false }).ToList(), quiet: false);
+        RequestOffers(VisibleRows.Where(r => r.VisibleOffer is { Requested: false }).ToList(), quiet: false);
 
     private void RequestOffers(IReadOnlyList<SoundRowViewModel> rows, bool quiet)
     {
@@ -252,6 +300,7 @@ public sealed partial class MainViewModel
     // ---- requested audio arrives -----------------------------------------------------------------------------
 
     private readonly List<string> _arrivedFrom = [];
+    private bool _arrivedAllHidden = true;
     private DispatcherTimer? _arrivedNotice;
 
     private async Task OnAudioAsync(WantedAudio wanted, byte[] data)
@@ -260,16 +309,20 @@ public sealed partial class MainViewModel
         var row = _allRows.FirstOrDefault(r => r.BankFileName == key.Bank && r.Info.Index == key.Index && r.Info.Id == key.Id);
         if (row == null || !row.CanReplace || row.Info.Format != wanted.Entry.Format || row.Info.Channels != wanted.Entry.Channels)
             return;
+        var hidden = (wanted.Entry.Hidden || _settings.HideFromOthers) && !_settings.RevealedOffers.Contains(IgnoreKey(wanted.Entry));
         if (row.Pending is { FromAuthor: null })
         {
-            Dialogs.Notify($"Kept your own change to {row.Name}", $"{wanted.OwnerName}'s version arrived, but you have your own change staged.", NoticeKind.Warning);
+            Dialogs.Notify(hidden ? $"Kept your own change" : $"Kept your own change to {row.Name}",
+                hidden ? $"A hidden sound from {wanted.OwnerName} is for a sound you've staged your own change to. Apply or discard yours, then Get it again."
+                       : $"{wanted.OwnerName}'s version arrived, but you have your own change staged.",
+                NoticeKind.Warning);
             return;
         }
 
         try
         {
-            var prepared = await Task.Run(() => PrepareReceived(row, data, wanted));
-            SetPending(row, new PendingChange(row, prepared) { FromAuthor = SyncProtocol.CleanName(wanted.OwnerName) });
+            var prepared = await Task.Run(() => PrepareReceived(row, data, wanted, hidden));
+            SetPending(row, new PendingChange(row, prepared) { FromAuthor = SyncProtocol.CleanName(wanted.OwnerName), IsHidden = hidden, SenderHidden = wanted.Entry.Hidden });
             RefreshPendingState();
             if (row.Offer != null)
                 row.Offer.Requested = false;
@@ -278,13 +331,14 @@ public sealed partial class MainViewModel
 
             // One notice for a batch rather than one per sound.
             _arrivedFrom.Add(wanted.OwnerName);
+            _arrivedAllHidden &= hidden;
             _arrivedNotice ??= CreateArrivedNotice();
             _arrivedNotice.Stop();
             _arrivedNotice.Start();
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or NotSupportedException)
         {
-            Dialogs.Notify($"Couldn't use {row.Name}", ex.Message, NoticeKind.Warning);
+            Dialogs.Notify(hidden ? $"Couldn't use a sound from {wanted.OwnerName}" : $"Couldn't use {row.Name}", ex.Message, NoticeKind.Warning);
         }
     }
 
@@ -296,30 +350,36 @@ public sealed partial class MainViewModel
             timer.Stop();
             var count = _arrivedFrom.Count;
             var who = string.Join(" & ", _arrivedFrom.Distinct());
+            var allHidden = _arrivedAllHidden;
             _arrivedFrom.Clear();
+            _arrivedAllHidden = true;
             if (count > 0)
                 Dialogs.Notify($"{count} sound{(count == 1 ? "" : "s")} from {who}",
-                    "They're under Pending changes. Listen, then Apply to game.", NoticeKind.Info);
+                    allHidden ? "They're under Pending changes. Apply to game to hear them." : "They're under Pending changes. Listen, then Apply to game.",
+                    NoticeKind.Info);
         };
         return timer;
     }
 
     /// <summary>Game-encoded audio from someone else, as a staged replacement (kept as a WAV for trimming etc.).</summary>
-    private static PreparedReplacement PrepareReceived(SoundRowViewModel row, byte[] data, WantedAudio wanted)
+    private static PreparedReplacement PrepareReceived(SoundRowViewModel row, byte[] data, WantedAudio wanted, bool hidden)
     {
         var audio = AudioDecoder.Decode(data, row.Info.Format, row.Info.Channels, row.Info.SampleRate);
         var folder = Path.Combine(AppPaths.SyncFolder, "incoming");
         Directory.CreateDirectory(folder);
-        var wav = Path.Combine(folder, $"{row.Name} (from {SyncProtocol.CleanName(wanted.OwnerName)} {DateTime.Now:yyyy-MM-dd HH-mm-ss}).wav");
+        var wav = Path.Combine(folder, $"{(hidden ? "hidden" : row.Name)} (from {SyncProtocol.CleanName(wanted.OwnerName)} {DateTime.Now:yyyy-MM-dd HH-mm-ss}).wav");
         audio.SaveWav(wav);
         return new PreparedReplacement(wav, audio, data, wanted.Entry.SampleCount, row.Info.Format, audio.Duration);
     }
 }
 
 /// <summary>A version of a sound someone else has, shown in the details panel and the "Available" list.</summary>
-public sealed partial class OfferViewModel(Difference difference, bool requested, SyncViewModel sync) : ObservableObject
+public sealed partial class OfferViewModel(Difference difference, bool requested, SyncViewModel sync, bool hidden) : ObservableObject
 {
     public Difference Difference { get; } = difference;
+
+    /// <summary>No name and no listening until it's applied.</summary>
+    public bool IsHidden { get; } = hidden;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(StatusText), nameof(CanGet))]
@@ -328,13 +388,20 @@ public sealed partial class OfferViewModel(Difference difference, bool requested
     public bool CanGet => !Requested;
     public string OwnerName => Difference.OwnerName;
 
-    public string Title => Difference.Kind == DifferenceKind.BothChanged
+    public string GetToolTip => IsHidden
+        ? "Ask for their version; it stays hidden until you apply it"
+        : "Ask for their version; you can listen to it before applying";
+
+    public string Title => !IsHidden && Difference.Kind == DifferenceKind.BothChanged
         ? $"{OwnerName} changed this too"
         : $"Available from {OwnerName}";
 
-    public string Explanation => Difference.Kind == DifferenceKind.BothChanged
-        ? $"You both changed this sound, differently. Get {OwnerName}'s version to hear it next to yours."
-        : $"{OwnerName} changed this sound; yours is the original.";
+    public string Explanation => (Difference.Kind, IsHidden) switch
+    {
+        (DifferenceKind.BothChanged, false) => $"You both changed this sound, differently. Get {OwnerName}'s version to hear it next to yours.",
+        (_, true) => "Its name and audio stay hidden until you apply it.",
+        _ => $"{OwnerName} changed this sound; yours is the original.",
+    };
 
     public string TheirVersion
     {

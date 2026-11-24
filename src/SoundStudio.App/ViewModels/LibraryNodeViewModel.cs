@@ -46,7 +46,7 @@ public sealed partial class LibraryNodeViewModel : ObservableObject
     public bool IsPendingNode => Kind == LibraryNodeKind.Pending;
 
     /// <summary>Staged changes among this node's sounds.</summary>
-    public int PendingCount => Rows.Count(r => r.HasPending);
+    public int PendingCount => Kind == LibraryNodeKind.Pending ? Rows.Count : Rows.Count(r => r.Pending is { IsHidden: false });
     public bool HasPendingRows => Kind != LibraryNodeKind.Pending && PendingCount > 0;
 
     [ObservableProperty]

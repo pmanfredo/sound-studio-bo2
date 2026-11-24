@@ -43,7 +43,7 @@ public sealed partial class MainViewModel
     [RelayCommand]
     private async Task ReplaceSelectedAsync()
     {
-        if (SelectedRow is not { CanReplace: true } row)
+        if (SelectedRow is not { CanReplace: true, IsMasked: false } row)
             return;
         var file = Dialogs.PickFile($"Choose new audio for {row.Name}", ReplacementEncoder.FileFilter);
         if (file != null)
@@ -54,7 +54,7 @@ public sealed partial class MainViewModel
     [RelayCommand]
     private void RecordSelected()
     {
-        if (SelectedRow is not { CanReplace: true } row)
+        if (SelectedRow is not { CanReplace: true, IsMasked: false } row)
             return;
         Player.StopCommand.Execute(null);
         Dialogs.ShowRecorder(CreateRecorder(row));
@@ -67,7 +67,7 @@ public sealed partial class MainViewModel
         var info = row.Info;
         recorder.AddBackingTrack("Game audio",
             () => Task.Run<DecodedAudio?>(() => AudioDecoder.Decode(Core.Bo2.SoundReader.Read(info.Bank.FilePath, info.Index, info.Id))));
-        if (row.Pending?.Prepared.Audio is { } staged)
+        if (row.Pending is { IsHidden: false, Prepared.Audio: { } staged })
             recorder.AddBackingTrack("New version", () => Task.FromResult<DecodedAudio?>(staged));
         return recorder;
     }
@@ -79,7 +79,7 @@ public sealed partial class MainViewModel
     [RelayCommand]
     private void LayerSelected()
     {
-        if (SelectedRow is not { CanReplace: true } row)
+        if (SelectedRow is not { CanReplace: true, IsMasked: false } row)
             return;
         Player.StopCommand.Execute(null);
         var session = _layerSessions.TryGetValue(row, out var s) && row.Pending?.Prepared.SourcePath == s.MixPath ? s : null;
@@ -113,6 +113,8 @@ public sealed partial class MainViewModel
         }
         var single = paths.Length == 1 && File.Exists(paths[0]);
         target ??= SelectedRow;
+        if (target is { IsMasked: true })
+            target = null; // don't reveal (or overwrite) a hidden change: match by name instead
         if (single && target != null)
         {
             if (!target.CanReplace)
@@ -136,6 +138,8 @@ public sealed partial class MainViewModel
         }
         var single = paths.Length == 1 && File.Exists(paths[0]);
         target ??= SelectedRow;
+        if (target is { IsMasked: true })
+            target = null;
         DropHint = single && target != null
             ? $"Drop to replace {target.Name}"
             : $"Drop to match {(paths.Length == 1 ? "these files" : $"{paths.Length} items")} to sounds by name";
@@ -234,8 +238,10 @@ public sealed partial class MainViewModel
         {
             if (prepared == null)
                 continue;
-            var wasVolumeOnly = row.Pending is { IsVolumeOnly: true } old && old.Prepared.SourcePath == prepared.SourcePath;
-            SetPending(row, new PendingChange(row, prepared) { IsVolumeOnly = wasVolumeOnly });
+            // Same source (trimmed): still the same change, from the same person, hidden or not.
+            SetPending(row, row.Pending is { } old && old.Prepared.SourcePath == prepared.SourcePath
+                ? old.With(prepared)
+                : new PendingChange(row, prepared));
             staged++;
         }
         RefreshPendingState();

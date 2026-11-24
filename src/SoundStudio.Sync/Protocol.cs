@@ -128,6 +128,9 @@ public sealed record ManifestEntry
     public string? Source { get; init; }
     public string? SoundName { get; init; }
 
+    /// <summary>The owner wants it hidden: hide where it came from and don't play it before it's applied.</summary>
+    public bool Hidden { get; init; }
+
     [JsonIgnore] public SoundKey Key => new(Bank, Index, Id);
 }
 

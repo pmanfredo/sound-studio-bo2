@@ -22,7 +22,7 @@ public sealed partial class MainViewModel
     [RelayCommand]
     private async Task EditExternallyAsync()
     {
-        if (SelectedRow is not { CanReplace: true } row)
+        if (SelectedRow is not { CanReplace: true, IsMasked: false } row)
             return;
         if (_externalEdits.TryGetValue(row, out var open))
         {
@@ -39,7 +39,7 @@ public sealed partial class MainViewModel
         try
         {
             var info = row.Info;
-            var audio = row.Pending?.Prepared.Audio
+            var audio = (row.Pending is { IsHidden: false } pending ? pending.Prepared.Audio : null)
                         ?? await Task.Run(() => AudioDecoder.Decode(SoundReader.Read(info.Bank.FilePath, info.Index, info.Id)));
             var folder = Path.Combine(AppPaths.EditsFolder, $"{Path.GetFileNameWithoutExtension(info.Bank.FileName)}-{info.Index}");
             Directory.CreateDirectory(folder);

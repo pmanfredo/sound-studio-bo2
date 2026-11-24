@@ -281,7 +281,7 @@ public sealed partial class MainViewModel : ObservableObject
         foreach (var row in _allRows)
         {
             if (staged.TryGetValue((row.BankFileName, row.Info.Index, row.Info.Id), out var change))
-                SetPending(row, new PendingChange(row, change.Prepared));
+                SetPending(row, change.With(change.Prepared, row));
         }
 
         Tree.Clear();
@@ -447,12 +447,21 @@ public sealed partial class MainViewModel : ObservableObject
         var source = SelectedNode?.Rows ?? _allRows;
         var terms = GameLibrary.ParseQuery(SearchText);
         var modifiedOnly = ModifiedOnly;
+        // Under Pending changes and Available from others, hidden changes are masked, so a search must not find them.
+        // (A hidden offer for a sound you're changing yourself waits until you've applied or discarded yours.)
+        var kind = SelectedNode?.Kind ?? LibraryNodeKind.AllSounds;
+        bool Excluded(SoundRowViewModel r) => kind switch
+        {
+            LibraryNodeKind.Pending => r.Pending?.IsHidden == true && terms.Length > 0,
+            LibraryNodeKind.Available => r.Offer?.IsHidden == true && (terms.Length > 0 || r.Pending is { IsHidden: false }),
+            _ => false,
+        };
 
         List<SoundRowViewModel> result;
         try
         {
             result = await Task.Run(() =>
-                source.Where(r => (!modifiedOnly || r.IsModified) && (terms.Length == 0 || r.Info.Matches(terms))).ToList(),
+                source.Where(r => !Excluded(r) && (!modifiedOnly || r.IsModified) && (terms.Length == 0 || r.Info.Matches(terms))).ToList(),
                 cts.Token);
         }
         catch (OperationCanceledException)
@@ -463,8 +472,10 @@ public sealed partial class MainViewModel : ObservableObject
             return;
 
         var previous = SelectedRow;
+        foreach (var row in result)
+            row.ShownIn = kind;
         VisibleRows = result;
-        OffersShownCount = result.Count(r => r.Offer is { Requested: false });
+        OffersShownCount = result.Count(r => r.VisibleOffer is { Requested: false });
         OnPropertyChanged(nameof(EmptyTitle));
         OnPropertyChanged(nameof(EmptyHint));
         SelectedRow = previous != null && result.Contains(previous) ? previous : null;
@@ -635,7 +646,7 @@ public sealed partial class MainViewModel : ObservableObject
     [RelayCommand]
     private void CopyName()
     {
-        if (SelectedRow != null)
+        if (SelectedRow is { IsMasked: false })
             Clipboard.SetText(SelectedRow.Name);
     }
 }

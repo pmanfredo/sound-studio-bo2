@@ -33,6 +33,8 @@ public sealed partial class SyncViewModel : ObservableObject, IAsyncDisposable
         _displayName = settings.DisplayName;
         _shareOverInternet = settings.ShareOverInternet;
         _autoGet = settings.AutoGetFromOthers;
+        _hideMine = settings.HideMine;
+        _hideFromOthers = settings.HideFromOthers;
         _publicAddress = settings.PublicAddress ?? "";
     }
 
@@ -97,6 +99,26 @@ public sealed partial class SyncViewModel : ObservableObject, IAsyncDisposable
     [ObservableProperty] private string? _tunnelStatus;
     /// <summary>Fetch everything others changed automatically (it still waits under Pending changes).</summary>
     [ObservableProperty] private bool _autoGet;
+    /// <summary>Others don't see your sounds' names and can't hear them until they apply them.</summary>
+    [ObservableProperty] private bool _hideMine;
+    /// <summary>Don't show or play what others send until it's applied.</summary>
+    [ObservableProperty] private bool _hideFromOthers;
+
+    public event EventHandler? HideFromOthersChanged;
+
+    partial void OnHideMineChanged(bool value)
+    {
+        _settings.HideMine = value;
+        SaveSettings();
+        _client?.ManifestChanged();
+    }
+
+    partial void OnHideFromOthersChanged(bool value)
+    {
+        _settings.HideFromOthers = value;
+        SaveSettings();
+        HideFromOthersChanged?.Invoke(this, EventArgs.Empty);
+    }
 
     /// <summary>Optional stable address (named Cloudflare tunnel, reverse proxy...). Empty = not used.</summary>
     [ObservableProperty] private string _publicAddress;

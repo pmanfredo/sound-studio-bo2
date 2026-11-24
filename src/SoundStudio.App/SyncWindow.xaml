@@ -160,6 +160,10 @@
 
                     <CheckBox Margin="0,16,0,0" Content="Get others' changes automatically" IsChecked="{Binding AutoGet}"
                               ToolTip="They still wait under Pending changes so you can listen before applying" />
+                    <CheckBox Margin="0,8,0,0" Content="Hide my sounds until applied" IsChecked="{Binding HideMine}"
+                              ToolTip="Others won't see the file name or be able to listen until they apply it" />
+                    <CheckBox Margin="0,8,0,0" Content="Hide others' sounds until applied" IsChecked="{Binding HideFromOthers}"
+                              ToolTip="Don't show or play what others send until you apply it" />
                     <WrapPanel Margin="0,12,0,0">
                         <ui:Button Content="Stop hosting" Icon="{ui:SymbolIcon Stop24}" Margin="0,0,8,8" Command="{Binding StopCommand}"
                                    Visibility="{Binding IsHost, Converter={StaticResource BoolToVisibility}}" />

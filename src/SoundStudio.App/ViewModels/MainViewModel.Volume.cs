@@ -32,7 +32,7 @@ public sealed partial class MainViewModel
     private void LoadVolumeForSelection()
     {
         _loadingVolume = true;
-        VolumeDb = SelectedRow?.Pending?.Prepared.Options.GainDb ?? 0;
+        VolumeDb = SelectedRow?.Pending is { IsHidden: false } staged ? staged.Prepared.Options.GainDb : 0;
         VolumeNote = null;
         _loadingVolume = false;
         OnPropertyChanged(nameof(VolumeText));
@@ -75,7 +75,8 @@ public sealed partial class MainViewModel
     {
         if (!row.CanReplace || IsBusy)
             return;
-        var pending = row.Pending;
+        var current = row.Pending;
+        var pending = current is { IsHidden: true } ? null : current; // someone's hidden change isn't yours to adjust
         var volumeOnly = pending == null || pending.IsVolumeOnly;
 
         // Back to 0 dB on a volume-only change: nothing left to stage.
@@ -98,9 +99,9 @@ public sealed partial class MainViewModel
             var source = pending?.Prepared.SourcePath ?? await Task.Run(() => SaveGameAudio(row));
             var options = (pending?.Prepared.Options ?? new ConvertOptions()) with { GainDb = gainDb };
             var prepared = await Task.Run(() => ReplacementEncoder.Prepare(source, info.Format, info.Channels, info.SampleRate, options));
-            if (!ReferenceEquals(row.Pending, pending))
+            if (!ReferenceEquals(row.Pending, current))
                 return; // something else changed this sound meanwhile
-            SetPending(row, new PendingChange(row, prepared) { IsVolumeOnly = volumeOnly });
+            SetPending(row, pending?.With(prepared, volumeOnly: volumeOnly) ?? new PendingChange(row, prepared) { IsVolumeOnly = volumeOnly });
             RefreshPendingState();
             VolumeNote = Math.Abs(prepared.AppliedGainDb - gainDb) > 0.05
                 ? $"Limited to {prepared.AppliedGainDb:+0.0;-0.0} dB so it doesn't distort."

@@ -87,6 +87,15 @@
                 <Setter Property="ToolTip" Value="{Binding Text, RelativeSource={RelativeSource Self}}" />
             </Style>
 
+            <!-- Grid details that would give away which sound a hidden change is for -->
+            <Style x:Key="GridCellHideable" TargetType="TextBlock" BasedOn="{StaticResource GridCellText}">
+                <Style.Triggers>
+                    <DataTrigger Binding="{Binding IsMasked}" Value="True">
+                        <Setter Property="Visibility" Value="Hidden" />
+                    </DataTrigger>
+                </Style.Triggers>
+            </Style>
+
             <Style x:Key="SectionLabel" TargetType="TextBlock">
                 <Setter Property="FontSize" Value="12" />
                 <Setter Property="Foreground" Value="{DynamicResource TextFillColorTertiaryBrush}" />

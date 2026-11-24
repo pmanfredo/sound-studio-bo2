@@ -50,6 +50,25 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
     public bool AllowAutoPlay { get; set; } = true;
 
     [ObservableProperty] private SoundRowViewModel? _row;
+
+    // A loaded sound can become someone's hidden change (or stop being one) while it's showing: reload so the
+    // player never plays it under "Hidden sound from ...".
+    partial void OnRowChanged(SoundRowViewModel? oldValue, SoundRowViewModel? newValue)
+    {
+        if (oldValue != null)
+            oldValue.PropertyChanged -= OnRowPropertyChanged;
+        if (newValue != null)
+            newValue.PropertyChanged += OnRowPropertyChanged;
+    }
+
+    private bool _loadedMasked;
+
+    private void OnRowPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(SoundRowViewModel.IsMasked) && sender is SoundRowViewModel row && ReferenceEquals(row, Row)
+            && row.IsMasked != _loadedMasked)
+            _ = LoadAsync(row, autoPlay: false);
+    }
     [ObservableProperty] private bool _isLoading;
     [ObservableProperty] private bool _isLoaded;
     [ObservableProperty] private string? _errorText;
@@ -113,6 +132,7 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
         _current = _original = _new = null;
         _peaksBySource.Clear();
         Row = row;
+        _loadedMasked = row?.IsMasked == true;
         IsLoaded = false;
         ErrorText = null;
         Peaks = [];
@@ -123,6 +143,8 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
 
         if (row == null)
             return;
+        if (row.IsMasked)
+            return; // nothing to play until it's applied
         if (row.Info.Format == AudioFormat.Xma4)
         {
             ErrorText = "XMA (Xbox) audio can't be played.";
@@ -133,7 +155,7 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
         try
         {
             var info = row.Info;
-            var staged = row.Pending?.Prepared.Audio;
+            var staged = row.Pending is { IsHidden: false } pending ? pending.Prepared.Audio : null; // hidden sounds stay unheard
             var (current, original) = await Task.Run(() =>
             {
                 var sound = SoundReader.Read(info.Bank.FilePath, info.Index, info.Id);

@@ -356,6 +356,21 @@ public sealed class SyncTests : IAsyncLifetime
     }
 
     [Fact]
+    public void Hidden_flag_survives_the_trip_and_older_manifests_are_not_hidden()
+    {
+        var entry = new ManifestEntry { Bank = "b.sabl", Index = 1, Id = 2, OriginalChecksum = "c", Hash = "h", Hidden = true };
+        var back = System.Text.Json.JsonSerializer.Deserialize<ManifestEntry>(
+            System.Text.Json.JsonSerializer.Serialize(entry, SyncProtocol.Json), SyncProtocol.Json)!;
+        Assert.True(back.Hidden);
+        Assert.Null(back.Source);
+
+        var old = System.Text.Json.JsonSerializer.Deserialize<ManifestEntry>(
+            "{\"bank\":\"b.sabl\",\"index\":1,\"id\":2,\"originalChecksum\":\"c\",\"hash\":\"h\",\"source\":\"voice.wav\"}", SyncProtocol.Json)!;
+        Assert.False(old.Hidden);
+        Assert.Equal("voice.wav", old.Source);
+    }
+
+    [Fact]
     public void Cleans_names_from_other_people()
     {
         Assert.Equal("Sam", SyncProtocol.CleanName("Sam\\..\\"));

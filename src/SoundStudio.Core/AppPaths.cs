@@ -98,8 +98,17 @@ public sealed class AppSettings
     /// <summary>Fetch whatever others changed automatically (it still waits under Pending changes).</summary>
     public bool AutoGetFromOthers { get; set; }
 
+    /// <summary>Others don't see the names of this install's sounds and can't hear them until they apply them.</summary>
+    public bool HideMine { get; set; }
+
+    /// <summary>Treat every sound from others as hidden (no name, no listening until applied).</summary>
+    public bool HideFromOthers { get; set; }
+
     /// <summary>Offers the user chose to ignore: "bank|index|id|fingerprint". A newer version is offered again.</summary>
     public List<string> IgnoredOffers { get; set; } = [];
+
+    /// <summary>Hidden changes the user chose to see anyway ("Which sound is it?"): "bank|index|id|fingerprint".</summary>
+    public List<string> RevealedOffers { get; set; } = [];
 
     public static AppSettings Load()
     {

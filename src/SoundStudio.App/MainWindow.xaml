@@ -209,7 +209,7 @@
                                             <TextBlock Text="Modified" FontSize="11" Foreground="{StaticResource ModifiedBrush}" />
                                         </Border>
                                         <Border Style="{StaticResource PendingPill}"
-                                                Visibility="{Binding HasPending, Converter={StaticResource BoolToVisibility}}">
+                                                Visibility="{Binding HasVisiblePending, Converter={StaticResource BoolToVisibility}}">
                                             <TextBlock Text="Pending" FontSize="11" Foreground="{StaticResource PendingBrush}" />
                                         </Border>
                                         <Border Style="{StaticResource AvailablePill}"
@@ -220,13 +220,13 @@
                                 </DataTemplate>
                             </DataGridTemplateColumn.CellTemplate>
                         </DataGridTemplateColumn>
-                        <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="2.4*" MinWidth="180" ElementStyle="{StaticResource GridCellText}" />
-                        <DataGridTextColumn Header="Map" Binding="{Binding MapName}" Width="1.2*" MinWidth="100" ElementStyle="{StaticResource GridCellText}" />
-                        <DataGridTextColumn Header="Bank" Binding="{Binding ShortBankLabel}" Width="1*" MinWidth="100" ElementStyle="{StaticResource GridCellText}" />
-                        <DataGridTextColumn Header="Format" Binding="{Binding FormatName}" Width="72" />
-                        <DataGridTextColumn Header="Length" Binding="{Binding DurationText}" SortMemberPath="DurationSeconds" Width="76" />
-                        <DataGridTextColumn Header="Channels" Binding="{Binding ChannelsText}" Width="88" />
-                        <DataGridTextColumn Header="Size" Binding="{Binding SizeText}" SortMemberPath="SizeBytes" Width="76" />
+                        <DataGridTextColumn Header="Name" Binding="{Binding ListName}" SortMemberPath="ListName" Width="2.4*" MinWidth="180" ElementStyle="{StaticResource GridCellText}" />
+                        <DataGridTextColumn Header="Map" Binding="{Binding MapName}" Width="1.2*" MinWidth="100" ElementStyle="{StaticResource GridCellHideable}" />
+                        <DataGridTextColumn Header="Bank" Binding="{Binding ShortBankLabel}" Width="1*" MinWidth="100" ElementStyle="{StaticResource GridCellHideable}" />
+                        <DataGridTextColumn Header="Format" Binding="{Binding FormatName}" Width="72" ElementStyle="{StaticResource GridCellHideable}" />
+                        <DataGridTextColumn Header="Length" Binding="{Binding DurationText}" SortMemberPath="DurationSeconds" Width="76" ElementStyle="{StaticResource GridCellHideable}" />
+                        <DataGridTextColumn Header="Channels" Binding="{Binding ChannelsText}" Width="88" ElementStyle="{StaticResource GridCellHideable}" />
+                        <DataGridTextColumn Header="Size" Binding="{Binding SizeText}" SortMemberPath="SizeBytes" Width="76" ElementStyle="{StaticResource GridCellHideable}" />
                     </DataGrid.Columns>
                 </DataGrid>
 
@@ -270,13 +270,14 @@
                                   Visibility="{Binding HasSelection, Converter={StaticResource BoolToVisibility}}">
                         <StackPanel Margin="0,0,14,0">
                             <StackPanel DataContext="{Binding SelectedRow}" d:DataContext="{d:DesignInstance vm:SoundRowViewModel}">
-                                <TextBlock Text="{Binding Name}" FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap" />
-                                <TextBlock Text="{Binding CategoryAndMap}" Margin="0,2,0,0" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                <TextBlock Text="{Binding ListName}" FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                <TextBlock Text="{Binding CategoryAndMap}" Margin="0,2,0,0" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                           Visibility="{Binding IsMasked, Converter={StaticResource InverseBoolToVisibility}}" />
 
                                 <!-- Status card -->
                                 <Border Margin="0,14,0,0" CornerRadius="6" Padding="12,10"
                                         Background="{StaticResource ModifiedBackgroundBrush}"
-                                        Visibility="{Binding IsModified, Converter={StaticResource BoolToVisibility}}">
+                                        Visibility="{Binding ShowModifiedCard, Converter={StaticResource BoolToVisibility}}">
                                     <StackPanel>
                                         <DockPanel>
                                             <ui:SymbolIcon DockPanel.Dock="Left" Symbol="Edit24" Foreground="{StaticResource ModifiedBrush}" Margin="0,0,10,0" VerticalAlignment="Top" />
@@ -304,7 +305,7 @@
                                 </Border>
                                 <Border Margin="0,14,0,0" CornerRadius="6" Padding="12,10"
                                         Background="{DynamicResource ControlFillColorSecondaryBrush}"
-                                        Visibility="{Binding IsModified, Converter={StaticResource InverseBoolToVisibility}}">
+                                        Visibility="{Binding ShowOriginalCard, Converter={StaticResource BoolToVisibility}}">
                                     <StackPanel Orientation="Horizontal">
                                         <ui:SymbolIcon Symbol="CheckmarkCircle24" Margin="0,0,10,0" />
                                         <TextBlock Text="Original game audio" VerticalAlignment="Center" />
@@ -315,7 +316,7 @@
                                 <Border Margin="0,10,0,0" CornerRadius="6" Padding="12,10"
                                         Background="{StaticResource AvailableBackgroundBrush}"
                                         Visibility="{Binding ShowOfferPill, Converter={StaticResource BoolToVisibility}}">
-                                    <StackPanel DataContext="{Binding Offer}">
+                                    <StackPanel DataContext="{Binding VisibleOffer}">
                                         <DockPanel>
                                             <ui:SymbolIcon DockPanel.Dock="Left" Symbol="CloudArrowDown24" Foreground="{StaticResource AvailableBrush}" Margin="0,0,10,0" VerticalAlignment="Top" />
                                             <TextBlock TextWrapping="Wrap">
@@ -324,7 +325,8 @@
                                                 <Run Text="{Binding Explanation, Mode=OneWay}" />
                                             </TextBlock>
                                         </DockPanel>
-                                        <TextBlock Margin="0,6,0,0" FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorSecondaryBrush}">
+                                        <TextBlock Margin="0,6,0,0" FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                                   Visibility="{Binding IsHidden, Converter={StaticResource InverseBoolToVisibility}}">
                                             <Run Text="Their version:" /> <Run Text="{Binding TheirVersion, Mode=OneWay}" />
                                         </TextBlock>
                                         <TextBlock Margin="0,6,0,0" FontSize="12" TextWrapping="Wrap" Text="{Binding StatusText}"
@@ -333,7 +335,7 @@
                                             <ui:Button Content="Get" Icon="{ui:SymbolIcon CloudArrowDown24}" Appearance="Primary" Margin="0,0,8,0"
                                                        Command="{Binding DataContext.GetSelectedCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                        Visibility="{Binding CanGet, Converter={StaticResource BoolToVisibility}}"
-                                                       ToolTip="Ask for their version; you can listen to it before applying" />
+                                                       ToolTip="{Binding GetToolTip}" />
                                             <ui:Button Content="Cancel request" Margin="0,0,8,0"
                                                        Command="{Binding DataContext.CancelRequestSelectedCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                        Visibility="{Binding Requested, Converter={StaticResource BoolToVisibility}}" />
@@ -347,27 +349,25 @@
                                 <!-- Staged replacement -->
                                 <Border Margin="0,10,0,0" CornerRadius="6" Padding="12,10"
                                         Background="{StaticResource PendingBackgroundBrush}"
-                                        Visibility="{Binding HasPending, Converter={StaticResource BoolToVisibility}}">
+                                        Visibility="{Binding HasVisiblePending, Converter={StaticResource BoolToVisibility}}">
                                     <StackPanel>
                                         <DockPanel>
                                             <ui:SymbolIcon DockPanel.Dock="Left" Symbol="ArrowSync24" Foreground="{StaticResource PendingBrush}" Margin="0,0,10,0" VerticalAlignment="Top" />
                                             <TextBlock TextWrapping="Wrap">
                                                 <Run Text="New audio staged" FontWeight="SemiBold" Foreground="{StaticResource PendingBrush}" />
                                                 <LineBreak />
-                                                <Run Text="{Binding Pending.Summary, Mode=OneWay}" />
+                                                <Run Text="{Binding VisiblePending.Summary, Mode=OneWay}" />
                                             </TextBlock>
                                         </DockPanel>
-                                        <DockPanel Margin="0,8,0,0" Visibility="{Binding Pending.Warning, Converter={StaticResource NullToVisibility}}">
+                                        <DockPanel Margin="0,8,0,0" Visibility="{Binding VisiblePending.Warning, Converter={StaticResource NullToVisibility}}">
                                             <ui:SymbolIcon DockPanel.Dock="Left" Symbol="Warning24" Foreground="{StaticResource ModifiedBrush}" Margin="0,0,10,0" VerticalAlignment="Top" />
-                                            <TextBlock Text="{Binding Pending.Warning}" TextWrapping="Wrap" FontSize="12" />
+                                            <TextBlock Text="{Binding VisiblePending.Warning}" TextWrapping="Wrap" FontSize="12" />
                                         </DockPanel>
                                         <WrapPanel Margin="0,10,0,0">
                                             <ui:Button Margin="0,0,8,0" Icon="{ui:SymbolIcon Cut24}"
                                                        Command="{Binding DataContext.TrimSelectedCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                       Visibility="{Binding Pending.IsTooLong, Converter={StaticResource BoolToVisibility}, FallbackValue=Collapsed}">
-                                                <TextBlock>
-                                                    <Run Text="Trim to" /> <Run Text="{Binding Pending.OriginalDurationText, Mode=OneWay}" />
-                                                </TextBlock>
+                                                       Visibility="{Binding VisiblePending.IsTooLong, Converter={StaticResource BoolToVisibility}, FallbackValue=Collapsed}">
+                                                <TextBlock Text="{Binding VisiblePending.TrimLabel}" />
                                             </ui:Button>
                                             <ui:Button Content="Discard" Icon="{ui:SymbolIcon Dismiss24}"
                                                        Command="{Binding DataContext.DiscardSelectedCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
@@ -375,6 +375,22 @@
                                     </StackPanel>
                                 </Border>
 
+                                <!-- A hidden change for a sound you've changed yourself -->
+                                <Border Margin="0,10,0,0" CornerRadius="6" Padding="12,10"
+                                        Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                                        Visibility="{Binding ShowOverlapNote, Converter={StaticResource BoolToVisibility}}">
+                                    <StackPanel>
+                                        <DockPanel>
+                                            <ui:SymbolIcon DockPanel.Dock="Left" Symbol="Info24" Margin="0,0,10,0" VerticalAlignment="Top" />
+                                            <TextBlock TextWrapping="Wrap" Text="You've changed this sound too. Applying replaces your version." />
+                                        </DockPanel>
+                                        <ui:Button Content="Which sound is it?" Margin="0,8,0,0" Appearance="Secondary"
+                                                   Command="{Binding DataContext.RevealSelectedCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- Everything below would give away which sound a hidden change is for -->
+                                <StackPanel Visibility="{Binding IsMasked, Converter={StaticResource InverseBoolToVisibility}}">
                                 <!-- Replace -->
                                 <StackPanel Margin="0,12,0,0" Visibility="{Binding CanReplace, Converter={StaticResource BoolToVisibility}}">
                                     <ui:Button HorizontalAlignment="Stretch" Icon="{ui:SymbolIcon Mic24}" Margin="0,0,0,8"
@@ -418,8 +434,8 @@
                                                Command="{Binding DataContext.ReplaceSelectedCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                ToolTip="Pick an audio file to replace this sound (Ctrl+R)">
                                         <Grid>
-                                            <TextBlock Text="Replace with a file…" Visibility="{Binding HasPending, Converter={StaticResource InverseBoolToVisibility}}" />
-                                            <TextBlock Text="Choose a different file…" Visibility="{Binding HasPending, Converter={StaticResource BoolToVisibility}}" />
+                                            <TextBlock Text="Replace with a file…" Visibility="{Binding HasVisiblePending, Converter={StaticResource InverseBoolToVisibility}}" />
+                                            <TextBlock Text="Choose a different file…" Visibility="{Binding HasVisiblePending, Converter={StaticResource BoolToVisibility}}" />
                                         </Grid>
                                     </ui:Button>
                                     <TextBlock Text="…or drop an audio file on this panel or on the sound in the list." FontSize="12" Margin="0,6,0,0"
@@ -496,8 +512,10 @@
                                 <TextBlock Text="Game asset path" Style="{StaticResource SectionLabel}" />
                                 <TextBox Text="{Binding AssetPath, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap"
                                          FontFamily="Consolas" FontSize="12" />
+                                </StackPanel>
                             </StackPanel>
 
+                            <StackPanel Visibility="{Binding SelectedRow.IsMasked, Converter={StaticResource InverseBoolToVisibility}, FallbackValue=Visible}">
                             <WrapPanel Margin="0,16,0,0">
                                 <ui:Button Content="Copy name" Icon="{ui:SymbolIcon Copy24}" Margin="0,0,8,8"
                                            Command="{Binding CopyNameCommand}" />
@@ -522,6 +540,7 @@
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
+                            </StackPanel>
                             </StackPanel>
                         </StackPanel>
                     </ScrollViewer>
@@ -642,8 +661,8 @@
 
                 <!-- Now playing -->
                 <StackPanel Grid.Column="1" Margin="12,0,8,0" VerticalAlignment="Center">
-                    <TextBlock Text="{Binding Row.Name, FallbackValue='Nothing selected', TargetNullValue='Nothing selected'}"
-                               FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip="{Binding Row.Name}" />
+                    <TextBlock Text="{Binding Row.ListName, FallbackValue='Nothing selected', TargetNullValue='Nothing selected'}"
+                               FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip="{Binding Row.ListName}" />
                     <TextBlock FontSize="12" Foreground="{DynamicResource TextFillColorTertiaryBrush}">
                         <Run Text="{Binding PositionText, Mode=OneWay}" /><Run Text=" / " /><Run Text="{Binding DurationText, Mode=OneWay}" />
                     </TextBlock>

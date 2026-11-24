@@ -158,6 +158,7 @@ public partial class App : Application
                         break;
                     case "touch": File.WriteAllText(Arg("--touch")!, "done"); break;
                     case "get-all": vm.GetAllShownCommand.Execute(null); break;
+                    case "reveal": await vm.RevealSelectedCommand.ExecuteAsync(null); break;
                     case "layers" when vm.SelectedRow is { } lr:
                     {
                         // Opens the layer editor, adds --layer-file files (2nd one quieter and delayed), screenshots, stages.
